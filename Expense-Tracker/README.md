@@ -15,22 +15,18 @@ Copy `.env.example` to `.env` locally and set:
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 
-The app writes saved splits to a `receipt_splits` table. A simple table shape is:
+The app auto-saves the active trip or event in browser storage. The **Save project to Supabase** button writes the full trip/event to an `expense_projects` table. A simple table shape is:
 
 ```sql
-create table receipt_splits (
+create table expense_projects (
   id uuid primary key default gen_random_uuid(),
   created_at timestamptz not null default now(),
-  receipt_type text,
-  paid_by text,
-  base_currency text,
+  project_name text,
   settlement_currency text,
   exchange_rate numeric,
-  tax_tip_percent numeric,
   participants jsonb,
-  items jsonb,
-  calculations jsonb,
-  ocr_text text
+  receipts jsonb,
+  calculations jsonb
 );
 ```
 

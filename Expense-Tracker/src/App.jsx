@@ -1,10 +1,59 @@
-import { useMemo, useRef, useState } from "react";
-import { calculateReceiptSplit, currencySymbols, money } from "./lib/calculations";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
 import { parseReceiptWithGemini } from "./lib/receiptParser";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
+const storageKey = "receipt-split-project-v1";
 const defaultParticipants = ["Kevin", "Alex", "Jamie", "Taylor"];
+
+const sampleItems = [
+  { id: 1, name: "Sangria pitcher", category: "Shared drinks", amount: 28, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
+  { id: 2, name: "Paella", category: "Main course", amount: 42, sharedBy: ["Kevin", "Alex"] },
+  { id: 3, name: "Sea bass", category: "Main course", amount: 31, sharedBy: ["Jamie"] },
+  { id: 4, name: "Rideshare to hotel", category: "Ride share", amount: 24, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
+];
+
+function createReceipt(overrides = {}) {
+  const now = Date.now();
+  return {
+    id: overrides.id || `receipt-${now}`,
+    place: overrides.place || "Barcelona dinner",
+    merchant: overrides.merchant || "",
+    receiptType: overrides.receiptType || "restaurant",
+    paidBy: overrides.paidBy || "Kevin",
+    baseCurrency: overrides.baseCurrency || "EUR",
+    taxTip: overrides.taxTip ?? 18,
+    items: overrides.items || sampleItems,
+    ocrText: overrides.ocrText || "",
+    ocrStatus: overrides.ocrStatus || "Ready for receipt image upload.",
+  };
+}
+
+function createInitialProject() {
+  return {
+    id: `project-${Date.now()}`,
+    name: "Barcelona trip",
+    participants: defaultParticipants,
+    settlementCurrency: "USD",
+    exchangeRate: 1.08,
+    receipts: [createReceipt()],
+  };
+}
+
+function loadInitialProject() {
+  if (typeof window === "undefined") return createInitialProject();
+
+  try {
+    const stored = window.localStorage.getItem(storageKey);
+    if (!stored) return createInitialProject();
+    const parsed = JSON.parse(stored);
+    if (!parsed.receipts?.length) return createInitialProject();
+    return parsed;
+  } catch {
+    return createInitialProject();
+  }
+}
 
 function SectionIcon({ children }) {
   return (
@@ -14,90 +63,191 @@ function SectionIcon({ children }) {
   );
 }
 
+function calculateProjectSplit(project) {
+  const owedByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
+  const paidByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
+  let subtotal = 0;
+  let total = 0;
+
+  const receiptSummaries = project.receipts.map((receipt) => {
+    const calculations = calculateReceiptSplit({
+      items: receipt.items,
+      participants: project.participants,
+      paidBy: receipt.paidBy,
+      taxTip: receipt.taxTip,
+    });
+
+    project.participants.forEach((person) => {
+      owedByPerson[person] += calculations.owedByPerson[person] || 0;
+      paidByPerson[person] += calculations.paidByPerson[person] || 0;
+    });
+
+    subtotal += calculations.subtotal;
+    total += calculations.total;
+
+    return { receipt, calculations };
+  });
+
+  const netByPerson = Object.fromEntries(
+    project.participants.map((person) => [person, (paidByPerson[person] || 0) - (owedByPerson[person] || 0)]),
+  );
+
+  return {
+    subtotal,
+    total,
+    owedByPerson,
+    paidByPerson,
+    netByPerson,
+    settlements: simplifyDebts(netByPerson),
+    receiptSummaries,
+  };
+}
+
 export default function ReceiptSplitApp() {
   const fileInputRef = useRef(null);
-  const [participants, setParticipants] = useState(defaultParticipants);
+  const [project, setProject] = useState(loadInitialProject);
+  const [activeReceiptId, setActiveReceiptId] = useState(project.receipts[0]?.id);
   const [newPerson, setNewPerson] = useState("");
-  const [baseCurrency, setBaseCurrency] = useState("EUR");
-  const [settlementCurrency, setSettlementCurrency] = useState("USD");
-  const [exchangeRate, setExchangeRate] = useState(1.08);
-  const [paidBy, setPaidBy] = useState("Kevin");
-  const [receiptType, setReceiptType] = useState("restaurant");
-  const [taxTip, setTaxTip] = useState(18);
-  const [items, setItems] = useState([
-    { id: 1, name: "Sangria pitcher", category: "Shared drinks", amount: 28, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
-    { id: 2, name: "Paella", category: "Main course", amount: 42, sharedBy: ["Kevin", "Alex"] },
-    { id: 3, name: "Sea bass", category: "Main course", amount: 31, sharedBy: ["Jamie"] },
-    { id: 4, name: "Rideshare to hotel", category: "Ride share", amount: 24, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
-  ]);
-  const [ocrStatus, setOcrStatus] = useState("Ready for receipt image upload.");
-  const [ocrText, setOcrText] = useState("");
-  const [receiptMerchant, setReceiptMerchant] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
+
+  const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKey, JSON.stringify(project));
+  }, [project]);
+
+  const updateProject = (patch) => {
+    setProject((current) => ({ ...current, ...patch }));
+  };
+
+  const updateActiveReceipt = (patch) => {
+    setProject((current) => ({
+      ...current,
+      receipts: current.receipts.map((receipt) => (receipt.id === activeReceipt.id ? { ...receipt, ...patch } : receipt)),
+    }));
+  };
+
+  const updateActiveItems = (updater) => {
+    updateActiveReceipt({ items: typeof updater === "function" ? updater(activeReceipt.items) : updater });
+  };
 
   const addParticipant = () => {
     const clean = newPerson.trim();
-    if (!clean || participants.includes(clean)) return;
-    setParticipants([...participants, clean]);
+    if (!clean || project.participants.includes(clean)) return;
+
+    setProject((current) => ({
+      ...current,
+      participants: [...current.participants, clean],
+      receipts: current.receipts.map((receipt) => ({
+        ...receipt,
+        items: receipt.items.map((item) => ({ ...item, sharedBy: [...item.sharedBy, clean] })),
+      })),
+    }));
     setNewPerson("");
   };
 
   const removeParticipant = (name) => {
-    setParticipants(participants.filter((p) => p !== name));
-    setItems(items.map((item) => ({ ...item, sharedBy: item.sharedBy.filter((p) => p !== name) })));
-    if (paidBy === name) {
-      const nextPayer = participants.find((p) => p !== name) || "";
-      setPaidBy(nextPayer);
+    setProject((current) => {
+      const participants = current.participants.filter((person) => person !== name);
+      const fallbackPayer = participants[0] || "";
+      return {
+        ...current,
+        participants,
+        receipts: current.receipts.map((receipt) => ({
+          ...receipt,
+          paidBy: receipt.paidBy === name ? fallbackPayer : receipt.paidBy,
+          items: receipt.items.map((item) => ({ ...item, sharedBy: item.sharedBy.filter((person) => person !== name) })),
+        })),
+      };
+    });
+  };
+
+  const addReceipt = (receiptType = "restaurant") => {
+    const receipt = createReceipt({
+      place: receiptType === "rideshare" ? "New ride share" : "New place",
+      receiptType,
+      paidBy: project.participants[0] || "",
+      items: [
+        {
+          id: Date.now(),
+          name: receiptType === "rideshare" ? "Ride share" : "New item",
+          category: receiptType === "rideshare" ? "Ride share" : "Shared",
+          amount: 0,
+          sharedBy: [...project.participants],
+        },
+      ],
+      taxTip: receiptType === "rideshare" ? 0 : 18,
+    });
+
+    setProject((current) => ({ ...current, receipts: [...current.receipts, receipt] }));
+    setActiveReceiptId(receipt.id);
+  };
+
+  const removeReceipt = (receiptId) => {
+    if (project.receipts.length === 1) return;
+    const remainingReceipts = project.receipts.filter((receipt) => receipt.id !== receiptId);
+    if (receiptId === activeReceipt.id) {
+      setActiveReceiptId(remainingReceipts[0]?.id);
     }
+    setProject((current) => ({
+      ...current,
+      receipts: current.receipts.filter((receipt) => receipt.id !== receiptId),
+    }));
   };
 
   const addItem = () => {
-    setItems([
+    updateActiveItems((items) => [
       ...items,
       {
         id: Date.now(),
-        name: receiptType === "rideshare" ? "Ride share" : "New item",
-        category: receiptType === "rideshare" ? "Ride share" : "Shared",
+        name: activeReceipt.receiptType === "rideshare" ? "Ride share" : "New item",
+        category: activeReceipt.receiptType === "rideshare" ? "Ride share" : "Shared",
         amount: 0,
-        sharedBy: [...participants],
+        sharedBy: [...project.participants],
       },
     ]);
   };
 
   const updateItem = (id, patch) => {
-    setItems(items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+    updateActiveItems((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
   const toggleShare = (itemId, person) => {
-    setItems(
+    updateActiveItems((items) =>
       items.map((item) => {
         if (item.id !== itemId) return item;
         const exists = item.sharedBy.includes(person);
         return {
           ...item,
-          sharedBy: exists ? item.sharedBy.filter((p) => p !== person) : [...item.sharedBy, person],
+          sharedBy: exists ? item.sharedBy.filter((sharedPerson) => sharedPerson !== person) : [...item.sharedBy, person],
         };
       }),
     );
   };
 
-  const calculations = useMemo(
-    () => calculateReceiptSplit({ items, participants, paidBy, taxTip }),
-    [items, participants, paidBy, taxTip],
+  const activeCalculations = useMemo(
+    () =>
+      calculateReceiptSplit({
+        items: activeReceipt.items,
+        participants: project.participants,
+        paidBy: activeReceipt.paidBy,
+        taxTip: activeReceipt.taxTip,
+      }),
+    [activeReceipt.items, activeReceipt.paidBy, activeReceipt.taxTip, project.participants],
   );
 
-  const convertedSettlements = calculations.settlements.map((settlement) => ({
+  const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
+
+  const convertedSettlements = projectCalculations.settlements.map((settlement) => ({
     ...settlement,
-    convertedAmount: settlement.amount * Number(exchangeRate || 1),
+    convertedAmount: settlement.amount * Number(project.exchangeRate || 1),
   }));
 
   const handleReceiptUpload = async (event) => {
     const [file] = event.target.files || [];
     if (!file) return;
 
-    setOcrText("");
-    setReceiptMerchant("");
-    setOcrStatus("Parsing receipt with Gemini...");
+    updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Parsing receipt with Gemini..." });
 
     try {
       const parsedReceipt = await parseReceiptWithGemini(file);
@@ -106,91 +256,146 @@ export default function ReceiptSplitApp() {
         name: item.name,
         category: item.category,
         amount: item.amount,
-        sharedBy: [...participants],
+        sharedBy: [...project.participants],
       }));
 
       if (!parsedItems.length) {
         throw new Error("Gemini did not find itemized receipt rows.");
       }
 
-      setItems(parsedItems);
-      setReceiptMerchant(parsedReceipt.merchant);
-      setBaseCurrency(currencySymbols[parsedReceipt.currency] ? parsedReceipt.currency : "USD");
-      setTaxTip(
-        parsedReceipt.subtotal > 0
-          ? Number((((parsedReceipt.tax + parsedReceipt.tip) / parsedReceipt.subtotal) * 100).toFixed(2))
-          : 0,
-      );
-      setOcrStatus(`Gemini itemized ${parsedItems.length} receipt item${parsedItems.length === 1 ? "" : "s"}.`);
-    } catch (geminiError) {
-      setOcrStatus(`Gemini parsing failed: ${geminiError.message}. Running Tesseract OCR fallback...`);
-      const text = await extractReceiptText(file, (progress) => {
-        setOcrStatus(`Recognizing receipt text: ${progress}%`);
+      updateActiveReceipt({
+        items: parsedItems,
+        merchant: parsedReceipt.merchant,
+        place: parsedReceipt.merchant || activeReceipt.place,
+        baseCurrency: currencySymbols[parsedReceipt.currency] ? parsedReceipt.currency : "USD",
+        taxTip:
+          parsedReceipt.subtotal > 0
+            ? Number((((parsedReceipt.tax + parsedReceipt.tip) / parsedReceipt.subtotal) * 100).toFixed(2))
+            : 0,
+        ocrStatus: `Gemini itemized ${parsedItems.length} receipt item${parsedItems.length === 1 ? "" : "s"}.`,
       });
-      setOcrText(text);
-      setOcrStatus(text ? "Tesseract fallback extracted receipt text." : "No text was detected in that image.");
+    } catch (geminiError) {
+      updateActiveReceipt({ ocrStatus: `Gemini parsing failed: ${geminiError.message}. Running Tesseract OCR fallback...` });
+      const text = await extractReceiptText(file, (progress) => {
+        updateActiveReceipt({ ocrStatus: `Recognizing receipt text: ${progress}%` });
+      });
+      updateActiveReceipt({
+        ocrText: text,
+        ocrStatus: text ? "Tesseract fallback extracted receipt text." : "No text was detected in that image.",
+      });
     } finally {
       event.target.value = "";
     }
   };
 
-  const saveSplit = async () => {
+  const saveProject = async () => {
     setSaveStatus("");
 
     if (!hasSupabaseConfig || !supabase) {
-      setSaveStatus("Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel or .env to enable saving.");
+      setSaveStatus("Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Vercel or .env to enable Supabase saving.");
       return;
     }
 
     const payload = {
-      receipt_type: receiptType,
-      paid_by: paidBy,
-      base_currency: baseCurrency,
-      settlement_currency: settlementCurrency,
-      exchange_rate: Number(exchangeRate || 1),
-      tax_tip_percent: Number(taxTip || 0),
-      participants,
-      items,
+      project_name: project.name,
+      participants: project.participants,
+      settlement_currency: project.settlementCurrency,
+      exchange_rate: Number(project.exchangeRate || 1),
+      receipts: project.receipts,
       calculations: {
-        ...calculations,
+        ...projectCalculations,
         convertedSettlements,
       },
-      ocr_text: ocrText,
     };
 
-    const { error } = await supabase.from("receipt_splits").insert(payload);
-    setSaveStatus(error ? `Save failed: ${error.message}` : "Split saved to Supabase.");
+    const { error } = await supabase.from("expense_projects").insert(payload);
+    setSaveStatus(error ? `Save failed: ${error.message}` : "Project saved to Supabase.");
   };
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 text-left text-slate-900 md:p-8">
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="flex flex-col gap-4 rounded-3xl bg-white p-6 shadow-sm md:flex-row md:items-center md:justify-between">
-          <div>
-            <p className="text-sm font-medium text-slate-500">Group travel expense splitter</p>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight">Receipt Split</h1>
-            <p className="mt-2 max-w-2xl text-slate-600">
-              Upload receipts, itemize shared items, assign main courses, split ride shares, convert currencies, and settle who owes whom.
+        <header className="flex flex-col gap-4 rounded-3xl bg-white p-6 shadow-sm xl:flex-row xl:items-center xl:justify-between">
+          <div className="space-y-3">
+            <p className="text-sm font-medium text-slate-500">Trip, event, and group expense splitter</p>
+            <input
+              className="w-full rounded-2xl border px-4 py-3 text-3xl font-bold tracking-tight xl:w-[32rem]"
+              value={project.name}
+              onChange={(event) => updateProject({ name: event.target.value })}
+              aria-label="Project name"
+            />
+            <p className="max-w-2xl text-slate-600">
+              Nest restaurants, ride shares, hotels, and one-off expenses under one trip or event, then settle the whole project.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="inline-flex items-center justify-center rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
-          >
-            Upload receipt
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={handleReceiptUpload}
-          />
+          <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[31rem]">
+            <div className="rounded-2xl bg-slate-100 p-4">
+              <p className="text-sm text-slate-500">Receipts</p>
+              <p className="text-2xl font-semibold">{project.receipts.length}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-100 p-4">
+              <p className="text-sm text-slate-500">Project total</p>
+              <p className="text-2xl font-semibold">{money(projectCalculations.total, activeReceipt.baseCurrency)}</p>
+            </div>
+            <div className="rounded-2xl bg-slate-900 p-4 text-white">
+              <p className="text-sm text-slate-300">Settle in</p>
+              <p className="text-2xl font-semibold">{project.settlementCurrency}</p>
+            </div>
+          </div>
         </header>
 
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
+        <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
           <section className="space-y-6">
+            <div className="rounded-3xl bg-white shadow-sm">
+              <div className="space-y-4 p-5">
+                <div className="flex items-center gap-2">
+                  <SectionIcon>TR</SectionIcon>
+                  <h2 className="text-xl font-semibold">Receipts and expenses</h2>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => addReceipt("restaurant")}
+                    className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                  >
+                    New place
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => addReceipt("rideshare")}
+                    className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    New ride
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {project.receipts.map((receipt) => {
+                    const summary = projectCalculations.receiptSummaries.find((entry) => entry.receipt.id === receipt.id);
+                    return (
+                      <button
+                        type="button"
+                        key={receipt.id}
+                        onClick={() => setActiveReceiptId(receipt.id)}
+                        className={`w-full rounded-2xl border p-3 text-left ${
+                          receipt.id === activeReceipt.id ? "border-slate-900 bg-slate-100" : "bg-white hover:bg-slate-50"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold">{receipt.place || "Untitled expense"}</p>
+                            <p className="text-sm text-slate-500">
+                              {receipt.receiptType} · paid by {receipt.paidBy || "Unassigned"}
+                            </p>
+                          </div>
+                          <span className="font-semibold">{money(summary?.calculations.total || 0, receipt.baseCurrency)}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
             <div className="rounded-3xl bg-white shadow-sm">
               <div className="space-y-4 p-5">
                 <div className="flex items-center gap-2">
@@ -216,7 +421,7 @@ export default function ReceiptSplitApp() {
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {participants.map((person) => (
+                  {project.participants.map((person) => (
                     <div key={person} className="flex items-center justify-between rounded-2xl bg-slate-100 px-3 py-2">
                       <span>{person}</span>
                       <button
@@ -236,64 +441,77 @@ export default function ReceiptSplitApp() {
               <div className="space-y-4 p-5">
                 <div className="flex items-center gap-2">
                   <SectionIcon>FX</SectionIcon>
-                  <h2 className="text-xl font-semibold">Currency</h2>
+                  <h2 className="text-xl font-semibold">Project currency</h2>
                 </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <label className="text-sm">
-                    Receipt currency
-                    <select
-                      className="mt-1 w-full rounded-2xl border px-3 py-2"
-                      value={baseCurrency}
-                      onChange={(event) => setBaseCurrency(event.target.value)}
-                    >
-                      {Object.keys(currencySymbols).map((currency) => (
-                        <option key={currency}>{currency}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="text-sm">
-                    Settle in
-                    <select
-                      className="mt-1 w-full rounded-2xl border px-3 py-2"
-                      value={settlementCurrency}
-                      onChange={(event) => setSettlementCurrency(event.target.value)}
-                    >
-                      {Object.keys(currencySymbols).map((currency) => (
-                        <option key={currency}>{currency}</option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
+                <label className="text-sm">
+                  Settle project in
+                  <select
+                    className="mt-1 w-full rounded-2xl border px-3 py-2"
+                    value={project.settlementCurrency}
+                    onChange={(event) => updateProject({ settlementCurrency: event.target.value })}
+                  >
+                    {Object.keys(currencySymbols).map((currency) => (
+                      <option key={currency}>{currency}</option>
+                    ))}
+                  </select>
+                </label>
                 <label className="block text-sm">
-                  Exchange rate
+                  Exchange rate from receipt currency
                   <input
                     type="number"
                     step="0.0001"
                     className="mt-1 w-full rounded-2xl border px-3 py-2"
-                    value={exchangeRate}
-                    onChange={(event) => setExchangeRate(event.target.value)}
+                    value={project.exchangeRate}
+                    onChange={(event) => updateProject({ exchangeRate: event.target.value })}
                   />
                 </label>
-                <p className="text-sm text-slate-500">
-                  Use a live FX API later; this demo lets the group enter the conversion rate manually.
-                </p>
               </div>
             </div>
           </section>
 
           <main className="space-y-6">
             <div className="rounded-3xl bg-white shadow-sm">
-              <div className="space-y-4 p-5">
-                <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="space-y-5 p-5">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex items-center gap-2">
-                    <SectionIcon>{receiptType === "rideshare" ? "RS" : "RC"}</SectionIcon>
-                    <h2 className="text-xl font-semibold">Receipt details</h2>
+                    <SectionIcon>{activeReceipt.receiptType === "rideshare" ? "RS" : "RC"}</SectionIcon>
+                    <h2 className="text-xl font-semibold">Active receipt</h2>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                    >
+                      Upload receipt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeReceipt(activeReceipt.id)}
+                      disabled={project.receipts.length === 1}
+                      className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      Delete receipt
+                    </button>
+                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleReceiptUpload} />
+                  </div>
+                </div>
+
+                <div className="grid gap-3 lg:grid-cols-4">
+                  <label className="text-sm lg:col-span-2">
+                    Place or merchant
+                    <input
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.place}
+                      onChange={(event) => updateActiveReceipt({ place: event.target.value })}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Type
                     <select
-                      className="rounded-2xl border px-3 py-2"
-                      value={receiptType}
-                      onChange={(event) => setReceiptType(event.target.value)}
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.receiptType}
+                      onChange={(event) => updateActiveReceipt({ receiptType: event.target.value })}
                     >
                       <option value="restaurant">Restaurant</option>
                       <option value="groceries">Groceries</option>
@@ -301,13 +519,43 @@ export default function ReceiptSplitApp() {
                       <option value="hotel">Hotel / lodging</option>
                       <option value="other">Other</option>
                     </select>
+                  </label>
+                  <label className="text-sm">
+                    Paid by
+                    <select
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.paidBy}
+                      onChange={(event) => updateActiveReceipt({ paidBy: event.target.value })}
+                    >
+                      {project.participants.map((person) => (
+                        <option key={person}>{person}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <div className="rounded-2xl border bg-slate-50 p-3">
+                  <p className="text-sm font-medium text-slate-600">Gemini parser / Tesseract fallback</p>
+                  <p className="text-sm text-slate-500">{activeReceipt.ocrStatus}</p>
+                  {activeReceipt.merchant ? (
+                    <p className="mt-2 text-sm font-medium text-slate-700">Parsed merchant: {activeReceipt.merchant}</p>
+                  ) : null}
+                  {activeReceipt.ocrText ? (
+                    <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs text-slate-600">
+                      {activeReceipt.ocrText}
+                    </pre>
+                  ) : null}
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap gap-2">
                     <select
                       className="rounded-2xl border px-3 py-2"
-                      value={paidBy}
-                      onChange={(event) => setPaidBy(event.target.value)}
+                      value={activeReceipt.baseCurrency}
+                      onChange={(event) => updateActiveReceipt({ baseCurrency: event.target.value })}
                     >
-                      {participants.map((person) => (
-                        <option key={person}>{person}</option>
+                      {Object.keys(currencySymbols).map((currency) => (
+                        <option key={currency}>{currency}</option>
                       ))}
                     </select>
                     <button
@@ -318,19 +566,6 @@ export default function ReceiptSplitApp() {
                       Add item
                     </button>
                   </div>
-                </div>
-
-                <div className="rounded-2xl border bg-slate-50 p-3">
-                  <p className="text-sm font-medium text-slate-600">OCR / Tesseract</p>
-                  <p className="text-sm text-slate-500">{ocrStatus}</p>
-                  {receiptMerchant ? (
-                    <p className="mt-2 text-sm font-medium text-slate-700">Merchant: {receiptMerchant}</p>
-                  ) : null}
-                  {ocrText ? (
-                    <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs text-slate-600">
-                      {ocrText}
-                    </pre>
-                  ) : null}
                 </div>
 
                 <div className="overflow-x-auto">
@@ -345,7 +580,7 @@ export default function ReceiptSplitApp() {
                       </tr>
                     </thead>
                     <tbody>
-                      {items.map((item) => (
+                      {activeReceipt.items.map((item) => (
                         <tr key={item.id} className="rounded-2xl bg-white shadow-sm">
                           <td className="rounded-l-2xl p-2">
                             <input
@@ -371,7 +606,7 @@ export default function ReceiptSplitApp() {
                           </td>
                           <td className="p-2">
                             <div className="flex flex-wrap gap-1">
-                              {participants.map((person) => (
+                              {project.participants.map((person) => (
                                 <button
                                   type="button"
                                   key={person}
@@ -388,7 +623,7 @@ export default function ReceiptSplitApp() {
                           <td className="rounded-r-2xl p-2">
                             <button
                               type="button"
-                              onClick={() => setItems(items.filter((currentItem) => currentItem.id !== item.id))}
+                              onClick={() => updateActiveItems((items) => items.filter((currentItem) => currentItem.id !== item.id))}
                               className="rounded-xl px-2 py-1 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
                             >
                               Remove
@@ -406,17 +641,17 @@ export default function ReceiptSplitApp() {
                     <input
                       type="number"
                       className="mt-1 w-full rounded-2xl border px-3 py-2"
-                      value={taxTip}
-                      onChange={(event) => setTaxTip(event.target.value)}
+                      value={activeReceipt.taxTip}
+                      onChange={(event) => updateActiveReceipt({ taxTip: event.target.value })}
                     />
                   </label>
                   <div className="rounded-2xl bg-slate-100 p-4">
-                    <p className="text-sm text-slate-500">Subtotal</p>
-                    <p className="text-2xl font-semibold">{money(calculations.subtotal, baseCurrency)}</p>
+                    <p className="text-sm text-slate-500">Receipt subtotal</p>
+                    <p className="text-2xl font-semibold">{money(activeCalculations.subtotal, activeReceipt.baseCurrency)}</p>
                   </div>
                   <div className="rounded-2xl bg-slate-900 p-4 text-white">
-                    <p className="text-sm text-slate-300">Total</p>
-                    <p className="text-2xl font-semibold">{money(calculations.total, baseCurrency)}</p>
+                    <p className="text-sm text-slate-300">Receipt total</p>
+                    <p className="text-2xl font-semibold">{money(activeCalculations.total, activeReceipt.baseCurrency)}</p>
                   </div>
                 </div>
               </div>
@@ -426,13 +661,13 @@ export default function ReceiptSplitApp() {
               <div className="rounded-3xl bg-white shadow-sm">
                 <div className="space-y-4 p-5">
                   <div className="flex items-center gap-2">
-                    <SectionIcon>CA</SectionIcon>
-                    <h2 className="text-xl font-semibold">Individual shares</h2>
+                    <SectionIcon>TO</SectionIcon>
+                    <h2 className="text-xl font-semibold">Project shares</h2>
                   </div>
-                  {participants.map((person) => (
+                  {project.participants.map((person) => (
                     <div key={person} className="flex items-center justify-between rounded-2xl bg-slate-100 px-4 py-3">
                       <span>{person}</span>
-                      <span className="font-semibold">{money(calculations.owedByPerson[person], baseCurrency)}</span>
+                      <span className="font-semibold">{money(projectCalculations.owedByPerson[person], activeReceipt.baseCurrency)}</span>
                     </div>
                   ))}
                 </div>
@@ -440,7 +675,7 @@ export default function ReceiptSplitApp() {
 
               <div className="rounded-3xl bg-white shadow-sm">
                 <div className="space-y-4 p-5">
-                  <h2 className="text-xl font-semibold">Who owes what</h2>
+                  <h2 className="text-xl font-semibold">Project settlement</h2>
                   {convertedSettlements.length === 0 ? (
                     <div className="rounded-2xl bg-green-50 p-4 text-green-700">Everyone is settled.</div>
                   ) : (
@@ -449,8 +684,8 @@ export default function ReceiptSplitApp() {
                         <p className="font-medium">
                           {settlement.from} pays {settlement.to}
                         </p>
-                        <p className="text-2xl font-bold">{money(settlement.convertedAmount, settlementCurrency)}</p>
-                        <p className="text-sm text-slate-500">Original: {money(settlement.amount, baseCurrency)}</p>
+                        <p className="text-2xl font-bold">{money(settlement.convertedAmount, project.settlementCurrency)}</p>
+                        <p className="text-sm text-slate-500">Original: {money(settlement.amount, activeReceipt.baseCurrency)}</p>
                       </div>
                     ))
                   )}
@@ -461,17 +696,17 @@ export default function ReceiptSplitApp() {
             <div className="rounded-3xl bg-white p-5 shadow-sm">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h2 className="text-xl font-semibold">Save split</h2>
+                  <h2 className="text-xl font-semibold">Store project</h2>
                   <p className="text-sm text-slate-500">
-                    Uses the Vite Supabase environment variables and writes to a `receipt_splits` table when available.
+                    Auto-saves in this browser and can also save the full trip/event to Supabase.
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={saveSplit}
+                  onClick={saveProject}
                   className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
                 >
-                  Save to Supabase
+                  Save project to Supabase
                 </button>
               </div>
               {saveStatus ? <p className="mt-3 text-sm text-slate-600">{saveStatus}</p> : null}
