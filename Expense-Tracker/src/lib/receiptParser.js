@@ -10,17 +10,13 @@ function fileToBase64(file) {
   });
 }
 
-export async function parseReceiptWithGemini(file) {
-  const imageBase64 = await fileToBase64(file);
+async function parseReceipt(payload) {
   const response = await fetch("/api/parse-receipt", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      imageBase64,
-      mimeType: file.type || "image/jpeg",
-    }),
+    body: JSON.stringify(payload),
   });
 
   const data = await response.json();
@@ -30,4 +26,16 @@ export async function parseReceiptWithGemini(file) {
   }
 
   return data;
+}
+
+export async function parseReceiptTextWithGemini(receiptText) {
+  return parseReceipt({ receiptText });
+}
+
+export async function parseReceiptImageWithGemini(file) {
+  const imageBase64 = await fileToBase64(file);
+  return parseReceipt({
+    imageBase64,
+    mimeType: file.type || "image/jpeg",
+  });
 }

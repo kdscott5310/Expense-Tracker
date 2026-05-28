@@ -44,4 +44,8 @@ The API route uses Gemini structured JSON output to return merchant, currency, s
 
 ## OCR
 
-Receipt image OCR is handled with `tesseract.js` and loaded lazily as a fallback when Gemini parsing fails.
+Receipt image OCR is handled with `tesseract.js` in the browser. Upload flow is:
+
+1. Run local Tesseract OCR.
+2. Send OCR text to Gemini for lower-cost itemization.
+3. Fall back to Gemini image parsing only when OCR text is too weak or text parsing fails.

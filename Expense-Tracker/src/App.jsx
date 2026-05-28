@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
-import { parseReceiptWithGemini } from "./lib/receiptParser";
+import { parseReceiptImageWithGemini, parseReceiptTextWithGemini } from "./lib/receiptParser";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
 const storageKey = "receipt-split-project-v1";
@@ -243,46 +243,64 @@ export default function ReceiptSplitApp() {
     convertedAmount: settlement.amount * Number(project.exchangeRate || 1),
   }));
 
+  const applyParsedReceipt = (parsedReceipt, sourceLabel) => {
+    const parsedItems = parsedReceipt.items.map((item, index) => ({
+      id: Date.now() + index,
+      name: item.name,
+      category: item.category,
+      amount: item.amount,
+      sharedBy: [...project.participants],
+    }));
+
+    if (!parsedItems.length) {
+      throw new Error(`${sourceLabel} did not find itemized receipt rows.`);
+    }
+
+    updateActiveReceipt({
+      items: parsedItems,
+      merchant: parsedReceipt.merchant,
+      place: parsedReceipt.merchant || activeReceipt.place,
+      baseCurrency: currencySymbols[parsedReceipt.currency] ? parsedReceipt.currency : "USD",
+      taxTip:
+        parsedReceipt.subtotal > 0
+          ? Number((((parsedReceipt.tax + parsedReceipt.tip) / parsedReceipt.subtotal) * 100).toFixed(2))
+          : 0,
+      ocrStatus: `${sourceLabel} itemized ${parsedItems.length} receipt item${parsedItems.length === 1 ? "" : "s"}.`,
+    });
+  };
+
   const handleReceiptUpload = async (event) => {
     const [file] = event.target.files || [];
     if (!file) return;
 
-    updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Parsing receipt with Gemini..." });
+    updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Running local Tesseract OCR..." });
 
     try {
-      const parsedReceipt = await parseReceiptWithGemini(file);
-      const parsedItems = parsedReceipt.items.map((item, index) => ({
-        id: Date.now() + index,
-        name: item.name,
-        category: item.category,
-        amount: item.amount,
-        sharedBy: [...project.participants],
-      }));
+      const text = await extractReceiptText(file, (progress) => {
+        updateActiveReceipt({ ocrStatus: `Running local Tesseract OCR: ${progress}%` });
+      });
 
-      if (!parsedItems.length) {
-        throw new Error("Gemini did not find itemized receipt rows.");
+      updateActiveReceipt({ ocrText: text });
+
+      if (text.trim().length >= 40) {
+        updateActiveReceipt({ ocrStatus: "Parsing Tesseract text with Gemini..." });
+        try {
+          const parsedReceipt = await parseReceiptTextWithGemini(text);
+          applyParsedReceipt(parsedReceipt, "Tesseract text + Gemini");
+          return;
+        } catch (textParseError) {
+          updateActiveReceipt({
+            ocrStatus: `Text parse failed: ${textParseError.message}. Trying Gemini image parsing...`,
+          });
+        }
+      } else {
+        updateActiveReceipt({ ocrStatus: "OCR text was too short. Trying Gemini image parsing..." });
       }
 
-      updateActiveReceipt({
-        items: parsedItems,
-        merchant: parsedReceipt.merchant,
-        place: parsedReceipt.merchant || activeReceipt.place,
-        baseCurrency: currencySymbols[parsedReceipt.currency] ? parsedReceipt.currency : "USD",
-        taxTip:
-          parsedReceipt.subtotal > 0
-            ? Number((((parsedReceipt.tax + parsedReceipt.tip) / parsedReceipt.subtotal) * 100).toFixed(2))
-            : 0,
-        ocrStatus: `Gemini itemized ${parsedItems.length} receipt item${parsedItems.length === 1 ? "" : "s"}.`,
-      });
-    } catch (geminiError) {
-      updateActiveReceipt({ ocrStatus: `Gemini parsing failed: ${geminiError.message}. Running Tesseract OCR fallback...` });
-      const text = await extractReceiptText(file, (progress) => {
-        updateActiveReceipt({ ocrStatus: `Recognizing receipt text: ${progress}%` });
-      });
-      updateActiveReceipt({
-        ocrText: text,
-        ocrStatus: text ? "Tesseract fallback extracted receipt text." : "No text was detected in that image.",
-      });
+      const parsedReceipt = await parseReceiptImageWithGemini(file);
+      applyParsedReceipt(parsedReceipt, "Gemini image");
+    } catch (error) {
+      updateActiveReceipt({ ocrStatus: `Receipt parsing failed: ${error.message}` });
     } finally {
       event.target.value = "";
     }
@@ -535,7 +553,7 @@ export default function ReceiptSplitApp() {
                 </div>
 
                 <div className="rounded-2xl border bg-slate-50 p-3">
-                  <p className="text-sm font-medium text-slate-600">Gemini parser / Tesseract fallback</p>
+                  <p className="text-sm font-medium text-slate-600">Tesseract OCR + Gemini parser</p>
                   <p className="text-sm text-slate-500">{activeReceipt.ocrStatus}</p>
                   {activeReceipt.merchant ? (
                     <p className="mt-2 text-sm font-medium text-slate-700">Parsed merchant: {activeReceipt.merchant}</p>

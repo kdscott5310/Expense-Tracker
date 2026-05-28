@@ -55,10 +55,31 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { imageBase64, mimeType = "image/jpeg" } = req.body || {};
+    const { imageBase64, mimeType = "image/jpeg", receiptText = "" } = req.body || {};
 
-    if (!imageBase64) {
-      return res.status(400).json({ error: "Missing imageBase64" });
+    if (!imageBase64 && !receiptText.trim()) {
+      return res.status(400).json({ error: "Missing receiptText or imageBase64" });
+    }
+
+    const parts = [
+      {
+        text:
+          "Parse this receipt. Extract merchant, currency, subtotal, tax, tip, total, and itemized purchased items. " +
+          "Use numbers for money values. Do not include payment card lines, authorization lines, duplicate totals, or receipt metadata as items.",
+      },
+    ];
+
+    if (receiptText.trim()) {
+      parts.push({
+        text: `Receipt OCR text:\n\n${receiptText.trim()}`,
+      });
+    } else {
+      parts.push({
+        inlineData: {
+          mimeType,
+          data: imageBase64,
+        },
+      });
     }
 
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -67,19 +88,7 @@ export default async function handler(req, res) {
       contents: [
         {
           role: "user",
-          parts: [
-            {
-              text:
-                "Parse this receipt image. Extract merchant, currency, subtotal, tax, tip, total, and itemized purchased items. " +
-                "Use numbers for money values. Do not include payment card lines, authorization lines, duplicate totals, or receipt metadata as items.",
-            },
-            {
-              inlineData: {
-                mimeType,
-                data: imageBase64,
-              },
-            },
-          ],
+          parts,
         },
       ],
       config: {
