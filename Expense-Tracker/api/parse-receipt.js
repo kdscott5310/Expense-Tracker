@@ -45,6 +45,14 @@ function normalizeReceipt(receipt) {
   };
 }
 
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: "4mb",
+    },
+  },
+};
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -59,6 +67,10 @@ export default async function handler(req, res) {
 
     if (!imageBase64 && !receiptText.trim()) {
       return res.status(400).json({ error: "Missing receiptText or imageBase64" });
+    }
+
+    if (imageBase64.length > 3_800_000) {
+      return res.status(413).json({ error: "Receipt image is too large. Try cropping closer to the receipt." });
     }
 
     const parts = [
