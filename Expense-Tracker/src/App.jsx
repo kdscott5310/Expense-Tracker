@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
+import { getProjectIdFromUrl, loadProjectFromSupabase, saveProjectToSupabase, setProjectIdInUrl } from "./lib/projectStore";
 import { parseReceiptImageWithGemini, parseReceiptTextWithGemini } from "./lib/receiptParser";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
@@ -8,23 +9,22 @@ const storageKey = "receipt-split-project-v1";
 const defaultParticipants = ["Kevin", "Alex", "Jamie", "Taylor"];
 
 const sampleItems = [
-  { id: 1, name: "Sangria pitcher", category: "Shared drinks", amount: 28, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
-  { id: 2, name: "Paella", category: "Main course", amount: 42, sharedBy: ["Kevin", "Alex"] },
-  { id: 3, name: "Sea bass", category: "Main course", amount: 31, sharedBy: ["Jamie"] },
-  { id: 4, name: "Rideshare to hotel", category: "Ride share", amount: 24, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
+  { id: crypto.randomUUID(), name: "Sangria pitcher", category: "Shared drinks", amount: 28, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
+  { id: crypto.randomUUID(), name: "Paella", category: "Main course", amount: 42, sharedBy: ["Kevin", "Alex"] },
+  { id: crypto.randomUUID(), name: "Sea bass", category: "Main course", amount: 31, sharedBy: ["Jamie"] },
+  { id: crypto.randomUUID(), name: "Rideshare to hotel", category: "Ride share", amount: 24, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
 ];
 
 function createReceipt(overrides = {}) {
-  const now = Date.now();
   return {
-    id: overrides.id || `receipt-${now}`,
+    id: overrides.id || crypto.randomUUID(),
     place: overrides.place || "Barcelona dinner",
     merchant: overrides.merchant || "",
     receiptType: overrides.receiptType || "restaurant",
     paidBy: overrides.paidBy || "Kevin",
     baseCurrency: overrides.baseCurrency || "EUR",
     taxTip: overrides.taxTip ?? 18,
-    items: overrides.items || sampleItems,
+    items: overrides.items || sampleItems.map((item) => ({ ...item, id: crypto.randomUUID(), sharedBy: [...item.sharedBy] })),
     ocrText: overrides.ocrText || "",
     ocrStatus: overrides.ocrStatus || "Ready for receipt image upload.",
   };
@@ -32,7 +32,7 @@ function createReceipt(overrides = {}) {
 
 function createInitialProject() {
   return {
-    id: `project-${Date.now()}`,
+    id: crypto.randomUUID(),
     name: "Barcelona trip",
     participants: defaultParticipants,
     settlementCurrency: "USD",
@@ -109,12 +109,72 @@ export default function ReceiptSplitApp() {
   const [activeReceiptId, setActiveReceiptId] = useState(project.receipts[0]?.id);
   const [newPerson, setNewPerson] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
+  const [shareStatus, setShareStatus] = useState("");
+  const [isSharedProject, setIsSharedProject] = useState(Boolean(getProjectIdFromUrl()));
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
   useEffect(() => {
     window.localStorage.setItem(storageKey, JSON.stringify(project));
   }, [project]);
+
+  useEffect(() => {
+    const id = getProjectIdFromUrl();
+    if (!id || !hasSupabaseConfig || !supabase) return;
+
+    let cancelled = false;
+
+    loadProjectFromSupabase(id)
+      .then((loadedProject) => {
+        if (cancelled) return;
+        setProject(loadedProject);
+        setActiveReceiptId(loadedProject.receipts[0]?.id);
+        setIsSharedProject(true);
+        setShareStatus("Shared project loaded.");
+      })
+      .catch((error) => {
+        if (!cancelled) setShareStatus(`Could not load shared project: ${error.message}`);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const id = getProjectIdFromUrl();
+    if (!id || !hasSupabaseConfig || !supabase) return undefined;
+
+    let reloadTimer;
+    const reloadProject = () => {
+      window.clearTimeout(reloadTimer);
+      reloadTimer = window.setTimeout(async () => {
+        try {
+          const loadedProject = await loadProjectFromSupabase(id);
+          setProject(loadedProject);
+          setActiveReceiptId((currentId) =>
+            loadedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : loadedProject.receipts[0]?.id,
+          );
+          setShareStatus("Shared project refreshed.");
+        } catch (error) {
+          setShareStatus(`Realtime refresh failed: ${error.message}`);
+        }
+      }, 500);
+    };
+
+    const channel = supabase
+      .channel(`project-${id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter: `id=eq.${id}` }, reloadProject)
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_members", filter: `project_id=eq.${id}` }, reloadProject)
+      .on("postgres_changes", { event: "*", schema: "public", table: "receipts", filter: `project_id=eq.${id}` }, reloadProject)
+      .on("postgres_changes", { event: "*", schema: "public", table: "receipt_items" }, reloadProject)
+      .subscribe();
+
+    return () => {
+      window.clearTimeout(reloadTimer);
+      supabase.removeChannel(channel);
+    };
+  }, [isSharedProject, project.id]);
 
   const updateProject = (patch) => {
     setProject((current) => ({ ...current, ...patch }));
@@ -169,7 +229,7 @@ export default function ReceiptSplitApp() {
       paidBy: project.participants[0] || "",
       items: [
         {
-          id: Date.now(),
+          id: crypto.randomUUID(),
           name: receiptType === "rideshare" ? "Ride share" : "New item",
           category: receiptType === "rideshare" ? "Ride share" : "Shared",
           amount: 0,
@@ -199,7 +259,7 @@ export default function ReceiptSplitApp() {
     updateActiveItems((items) => [
       ...items,
       {
-        id: Date.now(),
+        id: crypto.randomUUID(),
         name: activeReceipt.receiptType === "rideshare" ? "Ride share" : "New item",
         category: activeReceipt.receiptType === "rideshare" ? "Ride share" : "Shared",
         amount: 0,
@@ -244,8 +304,8 @@ export default function ReceiptSplitApp() {
   }));
 
   const applyParsedReceipt = (parsedReceipt, sourceLabel) => {
-    const parsedItems = parsedReceipt.items.map((item, index) => ({
-      id: Date.now() + index,
+    const parsedItems = parsedReceipt.items.map((item) => ({
+        id: crypto.randomUUID(),
       name: item.name,
       category: item.category,
       amount: item.amount,
@@ -314,20 +374,26 @@ export default function ReceiptSplitApp() {
       return;
     }
 
-    const payload = {
-      project_name: project.name,
-      participants: project.participants,
-      settlement_currency: project.settlementCurrency,
-      exchange_rate: Number(project.exchangeRate || 1),
-      receipts: project.receipts,
-      calculations: {
-        ...projectCalculations,
-        convertedSettlements,
-      },
-    };
+    try {
+      const savedProject = await saveProjectToSupabase(project);
+      setProject(savedProject);
+      setProjectIdInUrl(savedProject.id);
+      setIsSharedProject(true);
+      setShareStatus("Share link is active. Others can open this URL and add receipts.");
+      setSaveStatus("Project synced to Supabase.");
+    } catch (error) {
+      setSaveStatus(`Save failed: ${error.message}`);
+    }
+  };
 
-    const { error } = await supabase.from("expense_projects").insert(payload);
-    setSaveStatus(error ? `Save failed: ${error.message}` : "Project saved to Supabase.");
+  const copyShareLink = async () => {
+    if (!isSharedProject) {
+      setShareStatus("Sync the project to Supabase first, then copy the shared link.");
+      return;
+    }
+
+    await navigator.clipboard.writeText(window.location.href);
+    setShareStatus("Shared project link copied.");
   };
 
   return (
@@ -361,6 +427,32 @@ export default function ReceiptSplitApp() {
             </div>
           </div>
         </header>
+
+        <section className="flex flex-col gap-3 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-xl font-semibold">Shared project</h2>
+            <p className="text-sm text-slate-500">
+              Sync to Supabase to keep this trip across devices and let others add receipts from the same link.
+            </p>
+            {shareStatus ? <p className="mt-2 text-sm text-slate-700">{shareStatus}</p> : null}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={saveProject}
+              className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+            >
+              Sync shared project
+            </button>
+            <button
+              type="button"
+              onClick={copyShareLink}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Copy link
+            </button>
+          </div>
+        </section>
 
         <div className="grid gap-6 xl:grid-cols-[360px_1fr]">
           <section className="space-y-6">
@@ -716,7 +808,7 @@ export default function ReceiptSplitApp() {
                 <div>
                   <h2 className="text-xl font-semibold">Store project</h2>
                   <p className="text-sm text-slate-500">
-                    Auto-saves in this browser and can also save the full trip/event to Supabase.
+                    Auto-saves in this browser. Sync to Supabase to share across devices and collaborators.
                   </p>
                 </div>
                 <button
@@ -724,7 +816,7 @@ export default function ReceiptSplitApp() {
                   onClick={saveProject}
                   className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
                 >
-                  Save project to Supabase
+                  Sync shared project
                 </button>
               </div>
               {saveStatus ? <p className="mt-3 text-sm text-slate-600">{saveStatus}</p> : null}
