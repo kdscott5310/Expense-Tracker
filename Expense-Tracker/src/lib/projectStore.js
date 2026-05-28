@@ -33,8 +33,8 @@ export async function loadProjectFromSupabase(id) {
   if (projectError) throw projectError;
 
   const [{ data: members, error: membersError }, { data: receipts, error: receiptsError }] = await Promise.all([
-    supabase.from("project_members").select("*").eq("project_id", id).order("created_at"),
-    supabase.from("receipts").select("*").eq("project_id", id).order("created_at"),
+    supabase.from("project_members").select("*").eq("project_id", id).order("name"),
+    supabase.from("receipts").select("*").eq("project_id", id).order("id"),
   ]);
 
   if (membersError) throw membersError;
@@ -42,7 +42,7 @@ export async function loadProjectFromSupabase(id) {
 
   const receiptIds = receipts.map((receipt) => receipt.id);
   const { data: items, error: itemsError } = receiptIds.length
-    ? await supabase.from("receipt_items").select("*").in("receipt_id", receiptIds).order("created_at")
+    ? await supabase.from("receipt_items").select("*").in("receipt_id", receiptIds).order("id")
     : { data: [], error: null };
 
   if (itemsError) throw itemsError;
