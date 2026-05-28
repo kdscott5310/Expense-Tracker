@@ -1,16 +1,41 @@
-# React + Vite
+# Receipt Split
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A React + Vite receipt splitting app for shared travel, restaurant, lodging, and ride-share expenses.
 
-Currently, two official plugins are available:
+## Scripts
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- `npm run dev` starts the local Vite server.
+- `npm run build` creates the production build in `dist`.
+- `npm run lint` checks the app with ESLint.
 
-## React Compiler
+## Supabase
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Copy `.env.example` to `.env` locally and set:
 
-## Expanding the ESLint configuration
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+The app writes saved splits to a `receipt_splits` table. A simple table shape is:
+
+```sql
+create table receipt_splits (
+  id uuid primary key default gen_random_uuid(),
+  created_at timestamptz not null default now(),
+  receipt_type text,
+  paid_by text,
+  base_currency text,
+  settlement_currency text,
+  exchange_rate numeric,
+  tax_tip_percent numeric,
+  participants jsonb,
+  items jsonb,
+  calculations jsonb,
+  ocr_text text
+);
+```
+
+Add the same environment variables in Vercel project settings before deploying.
+
+## OCR
+
+Receipt image OCR is handled with `tesseract.js` and loaded lazily when a user uploads an image.
