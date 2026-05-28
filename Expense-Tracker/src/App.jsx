@@ -483,6 +483,7 @@ export default function ReceiptSplitApp() {
         <section className="flex flex-col gap-3 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-xl font-semibold">Shared project</h2>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">Sync test: May 28 build</p>
             <p className="text-sm text-slate-500">
               Sync to Supabase to keep this trip across devices and let others add receipts from the same link.
             </p>
