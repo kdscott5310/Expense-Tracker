@@ -116,6 +116,7 @@ export default function ReceiptSplitApp() {
   const [shareStatus, setShareStatus] = useState(urlProjectId ? "Loading shared project..." : "");
   const [isSharedProject, setIsSharedProject] = useState(Boolean(urlProjectId));
   const [sharedProjectLoaded, setSharedProjectLoaded] = useState(!urlProjectId);
+  const [parserMode, setParserMode] = useState("ai-image");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
@@ -380,14 +381,29 @@ export default function ReceiptSplitApp() {
     const [file] = event.target.files || [];
     if (!file) return;
 
-    updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Running local Tesseract OCR..." });
+    updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Preparing receipt parser..." });
 
     try {
+      if (parserMode === "ai-image") {
+        updateActiveReceipt({ ocrStatus: "Parsing receipt image directly with Gemini..." });
+        const parsedReceipt = await parseReceiptImageWithGemini(file);
+        applyParsedReceipt(parsedReceipt, "Gemini image");
+        return;
+      }
+
+      updateActiveReceipt({ ocrStatus: "Running local Tesseract OCR..." });
       const text = await extractReceiptText(file, (progress) => {
         updateActiveReceipt({ ocrStatus: `Running local Tesseract OCR: ${progress}%` });
       });
 
       updateActiveReceipt({ ocrText: text });
+
+      if (parserMode === "ocr-only") {
+        updateActiveReceipt({
+          ocrStatus: text ? "Tesseract OCR complete. Review the text below." : "Tesseract did not detect receipt text.",
+        });
+        return;
+      }
 
       if (text.trim().length >= 40) {
         updateActiveReceipt({ ocrStatus: "Parsing Tesseract text with Gemini..." });
@@ -655,6 +671,16 @@ export default function ReceiptSplitApp() {
                     </button>
                     <button
                       type="button"
+                      onClick={() => {
+                        setParserMode("ai-image");
+                        fileInputRef.current?.click();
+                      }}
+                      className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      Try AI image
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => removeReceipt(activeReceipt.id)}
                       disabled={project.receipts.length === 1}
                       className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
@@ -703,8 +729,33 @@ export default function ReceiptSplitApp() {
                 </div>
 
                 <div className="rounded-2xl border bg-slate-50 p-3">
-                  <p className="text-sm font-medium text-slate-600">Tesseract OCR + Gemini parser</p>
-                  <p className="text-sm text-slate-500">{activeReceipt.ocrStatus}</p>
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-600">Receipt parser</p>
+                      <p className="text-sm text-slate-500">{activeReceipt.ocrStatus}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        ["ai-image", "AI image"],
+                        ["hybrid", "OCR then AI"],
+                        ["ocr-only", "OCR only"],
+                      ].map(([value, label]) => (
+                        <button
+                          type="button"
+                          key={value}
+                          onClick={() => setParserMode(value)}
+                          className={`rounded-full px-3 py-1 text-xs font-medium ${
+                            parserMode === value ? "bg-slate-900 text-white" : "bg-white text-slate-600 ring-1 ring-slate-200"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-slate-500">
+                    AI image skips OCR and is best when receipt photos are messy. OCR then AI can be cheaper on clean receipts.
+                  </p>
                   {activeReceipt.merchant ? (
                     <p className="mt-2 text-sm font-medium text-slate-700">Parsed merchant: {activeReceipt.merchant}</p>
                   ) : null}
