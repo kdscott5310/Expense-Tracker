@@ -36,6 +36,16 @@ create table receipt_splits (
 
 Add the same environment variables in Vercel project settings before deploying.
 
+## Gemini Receipt Parsing
+
+Receipt itemization is handled by a Vercel serverless function at `api/parse-receipt.js`.
+
+Set this server-only environment variable locally and in Vercel:
+
+- `GEMINI_API_KEY`
+
+The API route uses Gemini structured JSON output to return merchant, currency, subtotal, tax, tip, total, and item rows. The browser never receives the Gemini key.
+
 ## OCR
 
-Receipt image OCR is handled with `tesseract.js` and loaded lazily when a user uploads an image.
+Receipt image OCR is handled with `tesseract.js` and loaded lazily as a fallback when Gemini parsing fails.

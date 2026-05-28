@@ -3,5 +3,10 @@
   "devCommand": "npm run dev",
   "framework": "vite",
   "installCommand": "npm install",
-  "outputDirectory": "dist"
+  "outputDirectory": "dist",
+  "functions": {
+    "api/parse-receipt.js": {
+      "maxDuration": 30
+    }
+  }
 }

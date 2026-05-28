@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { calculateReceiptSplit, currencySymbols, money } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
+import { parseReceiptWithGemini } from "./lib/receiptParser";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
 const defaultParticipants = ["Kevin", "Alex", "Jamie", "Taylor"];
@@ -31,6 +32,7 @@ export default function ReceiptSplitApp() {
   ]);
   const [ocrStatus, setOcrStatus] = useState("Ready for receipt image upload.");
   const [ocrText, setOcrText] = useState("");
+  const [receiptMerchant, setReceiptMerchant] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
 
   const addParticipant = () => {
@@ -94,16 +96,39 @@ export default function ReceiptSplitApp() {
     if (!file) return;
 
     setOcrText("");
-    setOcrStatus("Reading receipt image...");
+    setReceiptMerchant("");
+    setOcrStatus("Parsing receipt with Gemini...");
 
     try {
+      const parsedReceipt = await parseReceiptWithGemini(file);
+      const parsedItems = parsedReceipt.items.map((item, index) => ({
+        id: Date.now() + index,
+        name: item.name,
+        category: item.category,
+        amount: item.amount,
+        sharedBy: [...participants],
+      }));
+
+      if (!parsedItems.length) {
+        throw new Error("Gemini did not find itemized receipt rows.");
+      }
+
+      setItems(parsedItems);
+      setReceiptMerchant(parsedReceipt.merchant);
+      setBaseCurrency(currencySymbols[parsedReceipt.currency] ? parsedReceipt.currency : "USD");
+      setTaxTip(
+        parsedReceipt.subtotal > 0
+          ? Number((((parsedReceipt.tax + parsedReceipt.tip) / parsedReceipt.subtotal) * 100).toFixed(2))
+          : 0,
+      );
+      setOcrStatus(`Gemini itemized ${parsedItems.length} receipt item${parsedItems.length === 1 ? "" : "s"}.`);
+    } catch (geminiError) {
+      setOcrStatus(`Gemini parsing failed: ${geminiError.message}. Running Tesseract OCR fallback...`);
       const text = await extractReceiptText(file, (progress) => {
         setOcrStatus(`Recognizing receipt text: ${progress}%`);
       });
       setOcrText(text);
-      setOcrStatus(text ? "Receipt text extracted." : "No text was detected in that image.");
-    } catch (error) {
-      setOcrStatus(`OCR failed: ${error.message}`);
+      setOcrStatus(text ? "Tesseract fallback extracted receipt text." : "No text was detected in that image.");
     } finally {
       event.target.value = "";
     }
@@ -298,6 +323,9 @@ export default function ReceiptSplitApp() {
                 <div className="rounded-2xl border bg-slate-50 p-3">
                   <p className="text-sm font-medium text-slate-600">OCR / Tesseract</p>
                   <p className="text-sm text-slate-500">{ocrStatus}</p>
+                  {receiptMerchant ? (
+                    <p className="mt-2 text-sm font-medium text-slate-700">Merchant: {receiptMerchant}</p>
+                  ) : null}
                   {ocrText ? (
                     <pre className="mt-3 max-h-36 overflow-auto whitespace-pre-wrap rounded-xl bg-white p-3 text-xs text-slate-600">
                       {ocrText}
