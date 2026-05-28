@@ -76,6 +76,8 @@ create policy "public item write" on receipt_items for all to anon using (true) 
 
 Add the same environment variables in Vercel project settings before deploying.
 
+For public shared links, turn off Vercel Deployment Protection for the production deployment. Otherwise collaborators may see a Vercel login screen instead of the app.
+
 ## Gemini Receipt Parsing
 
 Receipt itemization is handled by a Vercel serverless function at `api/parse-receipt.js`.

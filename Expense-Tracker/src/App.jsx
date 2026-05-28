@@ -105,12 +105,17 @@ function calculateProjectSplit(project) {
 
 export default function ReceiptSplitApp() {
   const fileInputRef = useRef(null);
+  const applyingRemoteProjectRef = useRef(false);
+  const autoSyncTimerRef = useRef(null);
+  const savingProjectRef = useRef(false);
+  const urlProjectId = getProjectIdFromUrl();
   const [project, setProject] = useState(loadInitialProject);
   const [activeReceiptId, setActiveReceiptId] = useState(project.receipts[0]?.id);
   const [newPerson, setNewPerson] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
-  const [shareStatus, setShareStatus] = useState("");
-  const [isSharedProject, setIsSharedProject] = useState(Boolean(getProjectIdFromUrl()));
+  const [shareStatus, setShareStatus] = useState(urlProjectId ? "Loading shared project..." : "");
+  const [isSharedProject, setIsSharedProject] = useState(Boolean(urlProjectId));
+  const [sharedProjectLoaded, setSharedProjectLoaded] = useState(!urlProjectId);
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
@@ -127,13 +132,18 @@ export default function ReceiptSplitApp() {
     loadProjectFromSupabase(id)
       .then((loadedProject) => {
         if (cancelled) return;
+        applyingRemoteProjectRef.current = true;
         setProject(loadedProject);
         setActiveReceiptId(loadedProject.receipts[0]?.id);
         setIsSharedProject(true);
+        setSharedProjectLoaded(true);
         setShareStatus("Shared project loaded.");
       })
       .catch((error) => {
-        if (!cancelled) setShareStatus(`Could not load shared project: ${error.message}`);
+        if (!cancelled) {
+          setSharedProjectLoaded(false);
+          setShareStatus(`Could not load shared project: ${error.message}`);
+        }
       });
 
     return () => {
@@ -151,10 +161,12 @@ export default function ReceiptSplitApp() {
       reloadTimer = window.setTimeout(async () => {
         try {
           const loadedProject = await loadProjectFromSupabase(id);
+          applyingRemoteProjectRef.current = true;
           setProject(loadedProject);
           setActiveReceiptId((currentId) =>
             loadedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : loadedProject.receipts[0]?.id,
           );
+          setSharedProjectLoaded(true);
           setShareStatus("Shared project refreshed.");
         } catch (error) {
           setShareStatus(`Realtime refresh failed: ${error.message}`);
@@ -175,6 +187,41 @@ export default function ReceiptSplitApp() {
       supabase.removeChannel(channel);
     };
   }, [isSharedProject, project.id]);
+
+  useEffect(() => {
+    if (!isSharedProject || !sharedProjectLoaded || !hasSupabaseConfig || !supabase) return undefined;
+
+    if (applyingRemoteProjectRef.current) {
+      applyingRemoteProjectRef.current = false;
+      return undefined;
+    }
+
+    window.clearTimeout(autoSyncTimerRef.current);
+    autoSyncTimerRef.current = window.setTimeout(async () => {
+      if (savingProjectRef.current) return;
+
+      savingProjectRef.current = true;
+      setShareStatus("Auto-syncing shared project...");
+
+      try {
+        const savedProject = await saveProjectToSupabase(project);
+        if (savedProject.id !== project.id) {
+          applyingRemoteProjectRef.current = true;
+          setProject(savedProject);
+          setProjectIdInUrl(savedProject.id);
+        }
+        setShareStatus("Shared project auto-synced.");
+      } catch (error) {
+        setShareStatus(`Auto-sync failed: ${error.message}`);
+      } finally {
+        savingProjectRef.current = false;
+      }
+    }, 1200);
+
+    return () => {
+      window.clearTimeout(autoSyncTimerRef.current);
+    };
+  }, [isSharedProject, project, sharedProjectLoaded]);
 
   const updateProject = (patch) => {
     setProject((current) => ({ ...current, ...patch }));
@@ -305,7 +352,7 @@ export default function ReceiptSplitApp() {
 
   const applyParsedReceipt = (parsedReceipt, sourceLabel) => {
     const parsedItems = parsedReceipt.items.map((item) => ({
-        id: crypto.randomUUID(),
+      id: crypto.randomUUID(),
       name: item.name,
       category: item.category,
       amount: item.amount,
@@ -375,14 +422,19 @@ export default function ReceiptSplitApp() {
     }
 
     try {
+      savingProjectRef.current = true;
       const savedProject = await saveProjectToSupabase(project);
+      applyingRemoteProjectRef.current = true;
       setProject(savedProject);
       setProjectIdInUrl(savedProject.id);
       setIsSharedProject(true);
+      setSharedProjectLoaded(true);
       setShareStatus("Share link is active. Others can open this URL and add receipts.");
       setSaveStatus("Project synced to Supabase.");
     } catch (error) {
       setSaveStatus(`Save failed: ${error.message}`);
+    } finally {
+      savingProjectRef.current = false;
     }
   };
 
@@ -435,6 +487,11 @@ export default function ReceiptSplitApp() {
               Sync to Supabase to keep this trip across devices and let others add receipts from the same link.
             </p>
             {shareStatus ? <p className="mt-2 text-sm text-slate-700">{shareStatus}</p> : null}
+            {isSharedProject && !sharedProjectLoaded ? (
+              <p className="mt-2 text-sm font-medium text-amber-700">
+                This shared link has not loaded from Supabase yet, so edits here may only be local.
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap gap-2">
             <button
