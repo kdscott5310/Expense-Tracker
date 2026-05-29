@@ -27,6 +27,20 @@ export function setProjectIdInUrl(id) {
   window.history.replaceState({}, "", url);
 }
 
+export async function findProjectIdByName(name) {
+  const cleanName = name.trim();
+  if (!cleanName) return null;
+
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id")
+    .eq("name", cleanName)
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0]?.id || null;
+}
+
 export async function loadProjectFromSupabase(id) {
   const { data: project, error: projectError } = await supabase
     .from("projects")

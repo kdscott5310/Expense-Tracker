@@ -1,7 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
-import { getProjectIdFromUrl, loadProjectFromSupabase, saveProjectToSupabase, setProjectIdInUrl } from "./lib/projectStore";
+import {
+  findProjectIdByName,
+  getProjectIdFromUrl,
+  loadProjectFromSupabase,
+  saveProjectToSupabase,
+  setProjectIdInUrl,
+} from "./lib/projectStore";
 import { parseReceiptImageWithGemini, parseReceiptTextWithGemini } from "./lib/receiptParser";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
@@ -120,6 +126,16 @@ export default function ReceiptSplitApp() {
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
+  const applyLoadedProject = useCallback((loadedProject, status = "Shared project loaded.") => {
+    applyingRemoteProjectRef.current = true;
+    setProject(loadedProject);
+    setActiveReceiptId(loadedProject.receipts[0]?.id);
+    setProjectIdInUrl(loadedProject.id);
+    setIsSharedProject(true);
+    setSharedProjectLoaded(true);
+    setShareStatus(status);
+  }, []);
+
   useEffect(() => {
     window.localStorage.setItem(storageKey, JSON.stringify(project));
   }, [project]);
@@ -133,12 +149,7 @@ export default function ReceiptSplitApp() {
     loadProjectFromSupabase(id)
       .then((loadedProject) => {
         if (cancelled) return;
-        applyingRemoteProjectRef.current = true;
-        setProject(loadedProject);
-        setActiveReceiptId(loadedProject.receipts[0]?.id);
-        setIsSharedProject(true);
-        setSharedProjectLoaded(true);
-        setShareStatus("Shared project loaded.");
+        applyLoadedProject(loadedProject);
       })
       .catch((error) => {
         if (!cancelled) {
@@ -150,7 +161,7 @@ export default function ReceiptSplitApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [applyLoadedProject]);
 
   useEffect(() => {
     const id = getProjectIdFromUrl();
@@ -439,6 +450,26 @@ export default function ReceiptSplitApp() {
 
     try {
       savingProjectRef.current = true;
+
+      const urlId = getProjectIdFromUrl();
+      if ((urlId || isSharedProject) && !sharedProjectLoaded) {
+        const idToLoad = urlId || project.id;
+        const loadedProject = await loadProjectFromSupabase(idToLoad);
+        applyLoadedProject(loadedProject, "Loaded the server project first. Review it, then sync after edits.");
+        setSaveStatus("Loaded the existing shared project instead of saving local defaults.");
+        return;
+      }
+
+      if (!isSharedProject) {
+        const existingProjectId = await findProjectIdByName(project.name);
+        if (existingProjectId && existingProjectId !== project.id) {
+          const loadedProject = await loadProjectFromSupabase(existingProjectId);
+          applyLoadedProject(loadedProject, "Loaded existing project by name.");
+          setSaveStatus("Found this project name in Supabase and loaded it instead of creating a duplicate/default copy.");
+          return;
+        }
+      }
+
       const savedProject = await saveProjectToSupabase(project);
       applyingRemoteProjectRef.current = true;
       setProject(savedProject);
@@ -451,6 +482,29 @@ export default function ReceiptSplitApp() {
       setSaveStatus(`Save failed: ${error.message}`);
     } finally {
       savingProjectRef.current = false;
+    }
+  };
+
+  const loadProjectByName = async () => {
+    setSaveStatus("");
+
+    if (!hasSupabaseConfig || !supabase) {
+      setShareStatus("Add Supabase environment variables before loading a shared project.");
+      return;
+    }
+
+    try {
+      const existingProjectId = await findProjectIdByName(project.name);
+      if (!existingProjectId) {
+        setShareStatus(`No Supabase project found named "${project.name}". Sync once to create it.`);
+        return;
+      }
+
+      const loadedProject = await loadProjectFromSupabase(existingProjectId);
+      applyLoadedProject(loadedProject, "Loaded existing project by name.");
+      setSaveStatus("Server project loaded with its saved people and receipts.");
+    } catch (error) {
+      setShareStatus(`Load by name failed: ${error.message}`);
     }
   };
 
@@ -517,6 +571,13 @@ export default function ReceiptSplitApp() {
               className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
             >
               Sync shared project
+            </button>
+            <button
+              type="button"
+              onClick={loadProjectByName}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Load by name
             </button>
             <button
               type="button"
