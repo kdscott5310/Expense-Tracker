@@ -1,6 +1,7 @@
 const maxImageSide = 1600;
 const jpegQuality = 0.75;
 const maxBase64Bytes = 3_500_000;
+const maxPdfBytes = 3_000_000;
 
 function canvasToBlob(canvas, type, quality) {
   return new Promise((resolve, reject) => {
@@ -78,6 +79,18 @@ export async function parseReceiptTextWithGemini(receiptText) {
 }
 
 export async function parseReceiptImageWithGemini(file) {
+  if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    if (file.size > maxPdfBytes) {
+      throw new Error("PDF receipt is too large. Try downloading a smaller receipt PDF or screenshotting/cropping it first.");
+    }
+
+    const pdfBase64 = await blobToBase64(file);
+    return parseReceipt({
+      imageBase64: pdfBase64,
+      mimeType: "application/pdf",
+    });
+  }
+
   const imageBlob = await compressReceiptImage(file);
   const imageBase64 = await blobToBase64(imageBlob);
 

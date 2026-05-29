@@ -12,6 +12,10 @@ function receiptId(receipt) {
   return isUuid(receipt.id) ? receipt.id : crypto.randomUUID();
 }
 
+function itemId(item) {
+  return isUuid(item.id) ? item.id : crypto.randomUUID();
+}
+
 export function getProjectIdFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get("project");
@@ -81,6 +85,10 @@ export async function saveProjectToSupabase(project) {
   const receiptsWithIds = project.receipts.map((receipt) => ({
     ...receipt,
     id: receiptId(receipt),
+    items: receipt.items.map((item) => ({
+      ...item,
+      id: itemId(item),
+    })),
   }));
 
   const { error: projectError } = await supabase.from("projects").upsert({
@@ -92,17 +100,20 @@ export async function saveProjectToSupabase(project) {
 
   if (projectError) throw projectError;
 
-  const [{ error: deleteMembersError }, { error: deleteReceiptsError }] = await Promise.all([
-    supabase.from("project_members").delete().eq("project_id", id),
-    supabase.from("receipts").delete().eq("project_id", id),
+  const [{ data: existingMembers, error: existingMembersError }, { data: existingReceipts, error: existingReceiptsError }] = await Promise.all([
+    supabase.from("project_members").select("name").eq("project_id", id),
+    supabase.from("receipts").select("id").eq("project_id", id),
   ]);
 
-  if (deleteMembersError) throw deleteMembersError;
-  if (deleteReceiptsError) throw deleteReceiptsError;
+  if (existingMembersError) throw existingMembersError;
+  if (existingReceiptsError) throw existingReceiptsError;
 
-  if (project.participants.length) {
+  const existingMemberNames = new Set((existingMembers || []).map((member) => member.name));
+  const newMembers = project.participants.filter((name) => !existingMemberNames.has(name));
+
+  if (newMembers.length) {
     const { error } = await supabase.from("project_members").insert(
-      project.participants.map((name) => ({
+      newMembers.map((name) => ({
         project_id: id,
         name,
       })),
@@ -110,25 +121,36 @@ export async function saveProjectToSupabase(project) {
     if (error) throw error;
   }
 
-  if (receiptsWithIds.length) {
-    const { error } = await supabase.from("receipts").insert(
-      receiptsWithIds.map((receipt) => ({
-        id: receipt.id,
-        project_id: id,
-        place: receipt.place,
-        merchant: receipt.merchant,
-        receipt_type: receipt.receiptType,
-        paid_by: receipt.paidBy,
-        base_currency: receipt.baseCurrency,
-        tax_tip: Number(receipt.taxTip || 0),
-        ocr_text: receipt.ocrText,
-      })),
-    );
+  const existingReceiptIds = new Set((existingReceipts || []).map((receipt) => receipt.id));
+  const receiptsToUpsert = receiptsWithIds.filter((receipt) => existingReceiptIds.has(receipt.id));
+  const receiptsToInsert = receiptsWithIds.filter((receipt) => !existingReceiptIds.has(receipt.id));
+
+  const receiptRows = (receipts) =>
+    receipts.map((receipt) => ({
+      id: receipt.id,
+      project_id: id,
+      place: receipt.place,
+      merchant: receipt.merchant,
+      receipt_type: receipt.receiptType,
+      paid_by: receipt.paidBy,
+      base_currency: receipt.baseCurrency,
+      tax_tip: Number(receipt.taxTip || 0),
+      ocr_text: receipt.ocrText,
+    }));
+
+  if (receiptsToUpsert.length) {
+    const { error } = await supabase.from("receipts").upsert(receiptRows(receiptsToUpsert));
+    if (error) throw error;
+  }
+
+  if (receiptsToInsert.length) {
+    const { error } = await supabase.from("receipts").insert(receiptRows(receiptsToInsert));
     if (error) throw error;
   }
 
   const receiptItems = receiptsWithIds.flatMap((receipt) =>
     receipt.items.map((item) => ({
+      id: item.id,
       receipt_id: receipt.id,
       name: item.name,
       category: item.category,
@@ -138,7 +160,7 @@ export async function saveProjectToSupabase(project) {
   );
 
   if (receiptItems.length) {
-    const { error } = await supabase.from("receipt_items").insert(receiptItems);
+    const { error } = await supabase.from("receipt_items").upsert(receiptItems);
     if (error) throw error;
   }
 

@@ -69,14 +69,14 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: "Missing receiptText or imageBase64" });
     }
 
-    if (imageBase64.length > 3_800_000) {
+    if (imageBase64 && imageBase64.length > 3_800_000) {
       return res.status(413).json({ error: "Receipt image is too large. Try cropping closer to the receipt." });
     }
 
     const parts = [
       {
         text:
-          "Parse this receipt. Extract merchant, currency, subtotal, tax, tip, total, and itemized purchased items. " +
+          "Parse this receipt image or PDF. Extract merchant, currency, subtotal, tax, tip, total, and itemized purchased items. " +
           "Use numbers for money values. Do not include payment card lines, authorization lines, duplicate totals, or receipt metadata as items.",
       },
     ];

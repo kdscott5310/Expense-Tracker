@@ -17,6 +17,8 @@ Copy `.env.example` to `.env` locally and set:
 
 The app auto-saves the active trip or event in browser storage. **Sync shared project** writes normalized rows to Supabase so the same project link can be opened across devices and by other people.
 
+Sync is intentionally non-destructive: it upserts the current project, receipts, and items without deleting server rows that already exist.
+
 ```sql
 create table projects (
   id uuid primary key default gen_random_uuid(),
@@ -90,8 +92,8 @@ The API route uses Gemini structured JSON output to return merchant, currency, s
 
 ## OCR
 
-Receipt image OCR is handled with `tesseract.js` in the browser. Upload flow is:
+Receipt image OCR is handled with `tesseract.js` in the browser. PDF and image receipt parsing is handled by Gemini. Upload flow is:
 
-1. Run local Tesseract OCR.
-2. Send OCR text to Gemini for lower-cost itemization.
-3. Fall back to Gemini image parsing only when OCR text is too weak or text parsing fails.
+1. Use **AI image/PDF** for Uber PDFs and messy receipt photos.
+2. Use **OCR then AI** for clean receipt images when you want lower-cost text parsing.
+3. Use **OCR only** when you only want to inspect extracted text.

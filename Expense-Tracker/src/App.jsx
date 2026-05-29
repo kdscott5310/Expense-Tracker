@@ -384,10 +384,10 @@ export default function ReceiptSplitApp() {
     updateActiveReceipt({ ocrText: "", merchant: "", ocrStatus: "Preparing receipt parser..." });
 
     try {
-      if (parserMode === "ai-image") {
-        updateActiveReceipt({ ocrStatus: "Parsing receipt image directly with Gemini..." });
+      if (parserMode === "ai-image" || file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+        updateActiveReceipt({ ocrStatus: "Parsing receipt file directly with Gemini..." });
         const parsedReceipt = await parseReceiptImageWithGemini(file);
-        applyParsedReceipt(parsedReceipt, "Gemini image");
+        applyParsedReceipt(parsedReceipt, "Gemini file");
         return;
       }
 
@@ -677,7 +677,7 @@ export default function ReceiptSplitApp() {
                       }}
                       className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
                     >
-                      Try AI image
+                      Try AI file
                     </button>
                     <button
                       type="button"
@@ -687,7 +687,7 @@ export default function ReceiptSplitApp() {
                     >
                       Delete receipt
                     </button>
-                    <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleReceiptUpload} />
+                    <input ref={fileInputRef} type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={handleReceiptUpload} />
                   </div>
                 </div>
 
@@ -736,7 +736,7 @@ export default function ReceiptSplitApp() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       {[
-                        ["ai-image", "AI image"],
+                        ["ai-image", "AI image/PDF"],
                         ["hybrid", "OCR then AI"],
                         ["ocr-only", "OCR only"],
                       ].map(([value, label]) => (
@@ -754,7 +754,7 @@ export default function ReceiptSplitApp() {
                     </div>
                   </div>
                   <p className="mt-2 text-xs text-slate-500">
-                    AI image skips OCR and is best when receipt photos are messy. OCR then AI can be cheaper on clean receipts.
+                    AI image/PDF sends the file directly to Gemini and works best for Uber PDFs or messy receipt photos.
                   </p>
                   {activeReceipt.merchant ? (
                     <p className="mt-2 text-sm font-medium text-slate-700">Parsed merchant: {activeReceipt.merchant}</p>
