@@ -121,6 +121,7 @@ export async function loadProjectFromSupabase(id) {
     id: project.id,
     name: project.name,
     tripCode: project.trip_code || "",
+    serverSyncedAt: project.last_synced_at || project.created_at || "",
     settlementCurrency: project.settlement_currency || "USD",
     exchangeRate: project.exchange_rate || 1,
     participants: members.map((member) => member.name),
@@ -154,6 +155,7 @@ export async function loadProjectFromSupabase(id) {
 export async function saveProjectToSupabase(project, options = {}) {
   const id = projectId(project);
   const tripCode = normalizeTripCode(project.tripCode || (options.userId ? createTripCode(project.name) : ""));
+  const syncTimestamp = new Date().toISOString();
   const receiptsWithIds = project.receipts.map((receipt) => ({
     ...receipt,
     id: receiptId(receipt),
@@ -168,12 +170,19 @@ export async function saveProjectToSupabase(project, options = {}) {
     name: project.name,
     settlement_currency: project.settlementCurrency,
     exchange_rate: Number(project.exchangeRate || 1),
+    last_synced_at: syncTimestamp,
   };
 
   if (options.userId) projectRow.owner_id = options.userId;
   if (tripCode) projectRow.trip_code = tripCode;
 
-  const { error: projectError } = await supabase.from("projects").upsert(projectRow);
+  let { error: projectError } = await supabase.from("projects").upsert(projectRow);
+
+  if (projectError && String(projectError.message || "").includes("last_synced_at")) {
+    delete projectRow.last_synced_at;
+    const retry = await supabase.from("projects").upsert(projectRow);
+    projectError = retry.error;
+  }
 
   if (projectError) throw projectError;
 
@@ -249,6 +258,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     ...project,
     id,
     tripCode,
+    serverSyncedAt: projectRow.last_synced_at || project.serverSyncedAt || "",
     receipts: receiptsWithIds,
   };
 }

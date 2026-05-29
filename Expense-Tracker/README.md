@@ -107,6 +107,8 @@ Run `supabase-trip-expense-metadata.sql` to add optional fields for comprehensiv
 
 Older expenses still work. If no payment rows are entered, the app uses the single **Paid by** person for the full expense total.
 
+Run `supabase-last-sync.sql` to add the server sync timestamp shown in the app. This helps confirm whether a phone or laptop has pulled the newest Supabase copy.
+
 ## Gemini Receipt Parsing
 
 Receipt itemization is handled by a Vercel serverless function at `api/parse-receipt.js`.

@@ -91,6 +91,16 @@ function SectionIcon({ children }) {
   );
 }
 
+function formatServerTime(value) {
+  if (!value) return "Not synced yet";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Not synced yet";
+  return date.toLocaleString([], {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+}
+
 function calculateProjectSplit(project) {
   const owedByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
   const paidByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
@@ -157,6 +167,7 @@ export default function ReceiptSplitApp() {
   const [tripAccessStatus, setTripAccessStatus] = useState("");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
+  const serverSyncLabel = formatServerTime(project.serverSyncedAt);
 
   const applyLoadedProject = useCallback((loadedProject, status = "Shared project loaded.") => {
     applyingRemoteProjectRef.current = true;
@@ -259,7 +270,7 @@ export default function ReceiptSplitApp() {
             loadedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : loadedProject.receipts[0]?.id,
           );
           setSharedProjectLoaded(true);
-          setShareStatus("Shared project refreshed.");
+          setShareStatus(`Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
         } catch (error) {
           setShareStatus(`Realtime refresh failed: ${error.message}`);
         }
@@ -297,12 +308,12 @@ export default function ReceiptSplitApp() {
 
       try {
         const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
+        applyingRemoteProjectRef.current = true;
+        setProject(savedProject);
         if (savedProject.id !== project.id) {
-          applyingRemoteProjectRef.current = true;
-          setProject(savedProject);
           setProjectIdInUrl(savedProject.id);
         }
-        setShareStatus("Shared project auto-synced.");
+        setShareStatus(`Auto-synced to server: ${formatServerTime(savedProject.serverSyncedAt)}.`);
       } catch (error) {
         setShareStatus(`Auto-sync failed: ${error.message}`);
       } finally {
@@ -662,10 +673,38 @@ export default function ReceiptSplitApp() {
       }
 
       const loadedProject = await loadProjectFromSupabase(projectId);
-      applyLoadedProject(loadedProject, "Trip loaded by code.");
-      setTripAccessStatus(`Loaded ${cleanCode}.`);
+      applyLoadedProject(loadedProject, `Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
+      setTripAccessStatus(`Loaded ${cleanCode}. Latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
     } catch (error) {
       setTripAccessStatus(`Trip code load failed: ${error.message}`);
+    }
+  };
+
+  const pullLatestProject = async () => {
+    setSaveStatus("");
+
+    if (!hasSupabaseConfig || !supabase) {
+      setShareStatus("Add Supabase environment variables before pulling the latest server copy.");
+      return;
+    }
+
+    try {
+      let projectId = isSharedProject ? project.id : "";
+      const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
+      if (!projectId && cleanCode) {
+        projectId = await findProjectIdByTripCode(cleanCode);
+      }
+
+      if (!projectId) {
+        setShareStatus("No shared project or trip code found to pull from Supabase.");
+        return;
+      }
+
+      const loadedProject = await loadProjectFromSupabase(projectId);
+      applyLoadedProject(loadedProject, `Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
+      setTripAccessStatus(`Latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
+    } catch (error) {
+      setShareStatus(`Pull latest failed: ${error.message}`);
     }
   };
 
@@ -709,8 +748,12 @@ export default function ReceiptSplitApp() {
       setProjectIdInUrl(savedProject.id);
       setIsSharedProject(true);
       setSharedProjectLoaded(true);
-      setShareStatus("Share link is active. Others can open this URL and add receipts.");
-      setSaveStatus(savedProject.tripCode ? `Trip ${savedProject.tripCode} synced to Supabase.` : "Project synced to Supabase.");
+      setShareStatus(`Synced to server: ${formatServerTime(savedProject.serverSyncedAt)}.`);
+      setSaveStatus(
+        savedProject.tripCode
+          ? `Trip ${savedProject.tripCode} synced to Supabase at ${formatServerTime(savedProject.serverSyncedAt)}.`
+          : `Project synced to Supabase at ${formatServerTime(savedProject.serverSyncedAt)}.`,
+      );
       await refreshUserProjects(currentUser?.id);
     } catch (error) {
       setSaveStatus(`Save failed: ${error.message}`);
@@ -788,6 +831,7 @@ export default function ReceiptSplitApp() {
           <div>
             <h2 className="text-xl font-semibold">Trip code</h2>
             <p className="text-sm text-slate-500">Use one code for the group so everyone opens the same saved trip.</p>
+            <p className="mt-2 text-sm font-medium text-slate-700">Latest server sync: {serverSyncLabel}</p>
             {tripAccessStatus ? <p className="mt-2 text-sm text-slate-700">{tripAccessStatus}</p> : null}
           </div>
           <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto_auto] lg:items-end">
@@ -824,6 +868,13 @@ export default function ReceiptSplitApp() {
               className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
             >
               Sync
+            </button>
+            <button
+              type="button"
+              onClick={pullLatestProject}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 lg:col-start-2"
+            >
+              Pull latest
             </button>
           </div>
         </section>
@@ -921,10 +972,10 @@ export default function ReceiptSplitApp() {
         <section className="flex flex-col gap-3 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-xl font-semibold">Shared project</h2>
-            <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-emerald-700">Sync test: May 28 build</p>
             <p className="text-sm text-slate-500">
               Sync to Supabase to keep this trip across devices and let others add receipts from the same link.
             </p>
+            <p className="mt-2 text-sm font-medium text-slate-700">Latest server sync: {serverSyncLabel}</p>
             {shareStatus ? <p className="mt-2 text-sm text-slate-700">{shareStatus}</p> : null}
             {isSharedProject && !sharedProjectLoaded ? (
               <p className="mt-2 text-sm font-medium text-amber-700">
@@ -946,6 +997,13 @@ export default function ReceiptSplitApp() {
               className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
             >
               Load by name
+            </button>
+            <button
+              type="button"
+              onClick={pullLatestProject}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Pull latest
             </button>
             <button
               type="button"
