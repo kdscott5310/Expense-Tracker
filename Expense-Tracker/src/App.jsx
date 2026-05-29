@@ -36,6 +36,18 @@ function createReceipt(overrides = {}) {
   };
 }
 
+function expenseTypeLabel(type) {
+  const labels = {
+    restaurant: "Restaurant",
+    groceries: "Groceries",
+    rideshare: "Ride share",
+    hotel: "Hotel / lodging",
+    other: "Other",
+  };
+
+  return labels[type] || "Expense";
+}
+
 function createInitialProject() {
   return {
     id: crypto.randomUUID(),
@@ -283,14 +295,14 @@ export default function ReceiptSplitApp() {
 
   const addReceipt = (receiptType = "restaurant") => {
     const receipt = createReceipt({
-      place: receiptType === "rideshare" ? "New ride share" : "New place",
+      place: "New expense",
       receiptType,
       paidBy: project.participants[0] || "",
       items: [
         {
           id: crypto.randomUUID(),
-          name: receiptType === "rideshare" ? "Ride share" : "New item",
-          category: receiptType === "rideshare" ? "Ride share" : "Shared",
+          name: "New item",
+          category: expenseTypeLabel(receiptType),
           amount: 0,
           sharedBy: [...project.participants],
         },
@@ -320,7 +332,7 @@ export default function ReceiptSplitApp() {
       {
         id: crypto.randomUUID(),
         name: activeReceipt.receiptType === "rideshare" ? "Ride share" : "New item",
-        category: activeReceipt.receiptType === "rideshare" ? "Ride share" : "Shared",
+        category: expenseTypeLabel(activeReceipt.receiptType),
         amount: 0,
         sharedBy: [...project.participants],
       },
@@ -536,7 +548,7 @@ export default function ReceiptSplitApp() {
           </div>
           <div className="grid gap-3 sm:grid-cols-3 xl:min-w-[31rem]">
             <div className="rounded-2xl bg-slate-100 p-4">
-              <p className="text-sm text-slate-500">Receipts</p>
+              <p className="text-sm text-slate-500">Expenses</p>
               <p className="text-2xl font-semibold">{project.receipts.length}</p>
             </div>
             <div className="rounded-2xl bg-slate-100 p-4">
@@ -595,22 +607,23 @@ export default function ReceiptSplitApp() {
               <div className="space-y-4 p-5">
                 <div className="flex items-center gap-2">
                   <SectionIcon>TR</SectionIcon>
-                  <h2 className="text-xl font-semibold">Receipts and expenses</h2>
+                  <h2 className="text-xl font-semibold">Expenses</h2>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
-                    onClick={() => addReceipt("restaurant")}
+                    onClick={() => addReceipt(activeReceipt?.receiptType || "restaurant")}
                     className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
                   >
-                    New place
+                    New Expense
                   </button>
                   <button
                     type="button"
-                    onClick={() => addReceipt("rideshare")}
-                    className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+                    onClick={() => removeReceipt(activeReceipt.id)}
+                    disabled={project.receipts.length === 1}
+                    className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                   >
-                    New ride
+                    Remove Expense
                   </button>
                 </div>
                 <div className="space-y-2">
@@ -629,7 +642,7 @@ export default function ReceiptSplitApp() {
                           <div>
                             <p className="font-semibold">{receipt.place || "Untitled expense"}</p>
                             <p className="text-sm text-slate-500">
-                              {receipt.receiptType} · paid by {receipt.paidBy || "Unassigned"}
+                              {expenseTypeLabel(receipt.receiptType)} | paid by {receipt.paidBy || "Unassigned"}
                             </p>
                           </div>
                           <span className="font-semibold">{money(summary?.calculations.total || 0, receipt.baseCurrency)}</span>
@@ -701,7 +714,7 @@ export default function ReceiptSplitApp() {
                   </select>
                 </label>
                 <label className="block text-sm">
-                  Exchange rate from receipt currency
+                  Exchange rate from expense currency
                   <input
                     type="number"
                     step="0.0001"
@@ -719,8 +732,8 @@ export default function ReceiptSplitApp() {
               <div className="space-y-5 p-5">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div className="flex items-center gap-2">
-                    <SectionIcon>{activeReceipt.receiptType === "rideshare" ? "RS" : "RC"}</SectionIcon>
-                    <h2 className="text-xl font-semibold">Active receipt</h2>
+                    <SectionIcon>{activeReceipt.receiptType === "rideshare" ? "RS" : "EX"}</SectionIcon>
+                    <h2 className="text-xl font-semibold">Active expense</h2>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -746,7 +759,7 @@ export default function ReceiptSplitApp() {
                       disabled={project.receipts.length === 1}
                       className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
                     >
-                      Delete receipt
+                      Remove Expense
                     </button>
                     <input ref={fileInputRef} type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={handleReceiptUpload} />
                   </div>
@@ -754,7 +767,7 @@ export default function ReceiptSplitApp() {
 
                 <div className="grid gap-3 lg:grid-cols-4">
                   <label className="text-sm lg:col-span-2">
-                    Place or merchant
+                    Place, merchant, or description
                     <input
                       className="mt-1 w-full rounded-2xl border px-3 py-2"
                       value={activeReceipt.place}
@@ -762,7 +775,7 @@ export default function ReceiptSplitApp() {
                     />
                   </label>
                   <label className="text-sm">
-                    Type
+                    Expense type
                     <select
                       className="mt-1 w-full rounded-2xl border px-3 py-2"
                       value={activeReceipt.receiptType}
@@ -926,11 +939,11 @@ export default function ReceiptSplitApp() {
                     />
                   </label>
                   <div className="rounded-2xl bg-slate-100 p-4">
-                    <p className="text-sm text-slate-500">Receipt subtotal</p>
+                    <p className="text-sm text-slate-500">Expense subtotal</p>
                     <p className="text-2xl font-semibold">{money(activeCalculations.subtotal, activeReceipt.baseCurrency)}</p>
                   </div>
                   <div className="rounded-2xl bg-slate-900 p-4 text-white">
-                    <p className="text-sm text-slate-300">Receipt total</p>
+                    <p className="text-sm text-slate-300">Expense total</p>
                     <p className="text-2xl font-semibold">{money(activeCalculations.total, activeReceipt.baseCurrency)}</p>
                   </div>
                 </div>
@@ -941,15 +954,39 @@ export default function ReceiptSplitApp() {
               <div className="rounded-3xl bg-white shadow-sm">
                 <div className="space-y-4 p-5">
                   <div className="flex items-center gap-2">
-                    <SectionIcon>TO</SectionIcon>
-                    <h2 className="text-xl font-semibold">Project shares</h2>
+                    <SectionIcon>BA</SectionIcon>
+                    <h2 className="text-xl font-semibold">Balances by person</h2>
                   </div>
-                  {project.participants.map((person) => (
-                    <div key={person} className="flex items-center justify-between rounded-2xl bg-slate-100 px-4 py-3">
-                      <span>{person}</span>
-                      <span className="font-semibold">{money(projectCalculations.owedByPerson[person], activeReceipt.baseCurrency)}</span>
-                    </div>
-                  ))}
+                  <div className="space-y-3">
+                    {project.participants.map((person) => {
+                      const net = projectCalculations.netByPerson[person] || 0;
+                      return (
+                        <div key={person} className="rounded-2xl bg-slate-100 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="font-semibold">{person}</span>
+                            <span className={`font-semibold ${net >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                              {net >= 0 ? "Gets back " : "Owes "}
+                              {money(Math.abs(net), activeReceipt.baseCurrency)}
+                            </span>
+                          </div>
+                          <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-600">
+                            <div className="rounded-xl bg-white p-3">
+                              <p>Paid</p>
+                              <p className="font-semibold text-slate-900">
+                                {money(projectCalculations.paidByPerson[person], activeReceipt.baseCurrency)}
+                              </p>
+                            </div>
+                            <div className="rounded-xl bg-white p-3">
+                              <p>Used / shared</p>
+                              <p className="font-semibold text-slate-900">
+                                {money(projectCalculations.owedByPerson[person], activeReceipt.baseCurrency)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
@@ -997,3 +1034,4 @@ export default function ReceiptSplitApp() {
     </div>
   );
 }
+
