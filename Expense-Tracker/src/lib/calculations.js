@@ -42,7 +42,7 @@ export function simplifyDebts(netByPerson) {
   return settlements;
 }
 
-export function calculateReceiptSplit({ items, participants, paidBy, taxTip }) {
+export function calculateReceiptSplit({ items, participants, paidBy, taxTip, payments = [] }) {
   const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const multiplier = 1 + Number(taxTip || 0) / 100;
   const total = subtotal * multiplier;
@@ -56,7 +56,20 @@ export function calculateReceiptSplit({ items, participants, paidBy, taxTip }) {
     });
   });
 
-  const paidByPerson = Object.fromEntries(participants.map((person) => [person, person === paidBy ? total : 0]));
+  const paidByPerson = Object.fromEntries(participants.map((person) => [person, 0]));
+  const validPayments = payments
+    .filter((payment) => payment.person && participants.includes(payment.person))
+    .map((payment) => ({ ...payment, amount: Number(payment.amount || 0) }))
+    .filter((payment) => payment.amount > 0);
+
+  if (validPayments.length) {
+    validPayments.forEach((payment) => {
+      paidByPerson[payment.person] = (paidByPerson[payment.person] || 0) + payment.amount;
+    });
+  } else if (paidBy) {
+    paidByPerson[paidBy] = total;
+  }
+
   const netByPerson = Object.fromEntries(
     participants.map((person) => [person, (paidByPerson[person] || 0) - (owedByPerson[person] || 0)]),
   );

@@ -31,6 +31,10 @@ function createReceipt(overrides = {}) {
     merchant: overrides.merchant || "",
     receiptType: overrides.receiptType || "restaurant",
     paidBy: overrides.paidBy || "Kevin",
+    expenseDate: overrides.expenseDate || "",
+    tripStop: overrides.tripStop || "",
+    activity: overrides.activity || "",
+    payments: overrides.payments || [],
     baseCurrency: overrides.baseCurrency || "EUR",
     taxTip: overrides.taxTip ?? 18,
     items: overrides.items || sampleItems.map((item) => ({ ...item, id: crypto.randomUUID(), sharedBy: [...item.sharedBy] })),
@@ -97,6 +101,7 @@ function calculateProjectSplit(project) {
       participants: project.participants,
       paidBy: receipt.paidBy,
       taxTip: receipt.taxTip,
+      payments: receipt.payments,
     });
 
     project.participants.forEach((person) => {
@@ -345,6 +350,7 @@ export default function ReceiptSplitApp() {
         receipts: current.receipts.map((receipt) => ({
           ...receipt,
           paidBy: receipt.paidBy === name ? fallbackPayer : receipt.paidBy,
+          payments: (receipt.payments || []).filter((payment) => payment.person !== name),
           items: receipt.items.map((item) => ({ ...item, sharedBy: item.sharedBy.filter((person) => person !== name) })),
         })),
       };
@@ -356,6 +362,7 @@ export default function ReceiptSplitApp() {
       place: "New expense",
       receiptType,
       paidBy: project.participants[0] || "",
+      payments: [],
       items: [
         {
           id: crypto.randomUUID(),
@@ -401,6 +408,45 @@ export default function ReceiptSplitApp() {
     updateActiveItems((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
   };
 
+  const addPayment = () => {
+    updateActiveReceipt({
+      payments: [
+        ...(activeReceipt.payments || []),
+        {
+          id: crypto.randomUUID(),
+          person: activeReceipt.paidBy || project.participants[0] || "",
+          amount: "",
+        },
+      ],
+    });
+  };
+
+  const updatePayment = (id, patch) => {
+    updateActiveReceipt({
+      payments: (activeReceipt.payments || []).map((payment) => (payment.id === id ? { ...payment, ...patch } : payment)),
+    });
+  };
+
+  const removePayment = (id) => {
+    updateActiveReceipt({
+      payments: (activeReceipt.payments || []).filter((payment) => payment.id !== id),
+    });
+  };
+
+  const duplicateActiveExpense = () => {
+    const receipt = createReceipt({
+      ...activeReceipt,
+      id: crypto.randomUUID(),
+      place: `${activeReceipt.place || "Expense"} copy`,
+      items: activeReceipt.items.map((item) => ({ ...item, id: crypto.randomUUID(), sharedBy: [...item.sharedBy] })),
+      payments: (activeReceipt.payments || []).map((payment) => ({ ...payment, id: crypto.randomUUID() })),
+      ocrStatus: "Duplicated from another expense.",
+    });
+
+    setProject((current) => ({ ...current, receipts: [...current.receipts, receipt] }));
+    setActiveReceiptId(receipt.id);
+  };
+
   const toggleShare = (itemId, person) => {
     updateActiveItems((items) =>
       items.map((item) => {
@@ -421,8 +467,9 @@ export default function ReceiptSplitApp() {
         participants: project.participants,
         paidBy: activeReceipt.paidBy,
         taxTip: activeReceipt.taxTip,
+        payments: activeReceipt.payments,
       }),
-    [activeReceipt.items, activeReceipt.paidBy, activeReceipt.taxTip, project.participants],
+    [activeReceipt.items, activeReceipt.paidBy, activeReceipt.payments, activeReceipt.taxTip, project.participants],
   );
 
   const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
@@ -431,6 +478,8 @@ export default function ReceiptSplitApp() {
     ...settlement,
     convertedAmount: settlement.amount * Number(project.exchangeRate || 1),
   }));
+  const activePaymentTotal = (activeReceipt.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const activePaymentDifference = activePaymentTotal - activeCalculations.total;
 
   const applyParsedReceipt = (parsedReceipt, sourceLabel) => {
     const parsedItems = parsedReceipt.items.map((item) => ({
@@ -873,6 +922,11 @@ export default function ReceiptSplitApp() {
                             <p className="text-sm text-slate-500">
                               {expenseTypeLabel(receipt.receiptType)} | paid by {receipt.paidBy || "Unassigned"}
                             </p>
+                            {receipt.expenseDate || receipt.tripStop ? (
+                              <p className="text-xs text-slate-500">
+                                {[receipt.expenseDate, receipt.tripStop].filter(Boolean).join(" | ")}
+                              </p>
+                            ) : null}
                           </div>
                           <span className="font-semibold">{money(summary?.calculations.total || 0, receipt.baseCurrency)}</span>
                         </div>
@@ -984,6 +1038,13 @@ export default function ReceiptSplitApp() {
                     </button>
                     <button
                       type="button"
+                      onClick={duplicateActiveExpense}
+                      className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+                    >
+                      Duplicate
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => removeReceipt(activeReceipt.id)}
                       disabled={project.receipts.length === 1}
                       className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40"
@@ -995,6 +1056,33 @@ export default function ReceiptSplitApp() {
                 </div>
 
                 <div className="grid gap-3 lg:grid-cols-4">
+                  <label className="text-sm">
+                    Date
+                    <input
+                      type="date"
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.expenseDate || ""}
+                      onChange={(event) => updateActiveReceipt({ expenseDate: event.target.value })}
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Trip stop
+                    <input
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.tripStop || ""}
+                      onChange={(event) => updateActiveReceipt({ tripStop: event.target.value })}
+                      placeholder="Madrid, Seville, travel day"
+                    />
+                  </label>
+                  <label className="text-sm lg:col-span-2">
+                    Activity
+                    <input
+                      className="mt-1 w-full rounded-2xl border px-3 py-2"
+                      value={activeReceipt.activity || ""}
+                      onChange={(event) => updateActiveReceipt({ activity: event.target.value })}
+                      placeholder="Dinner, train, museum, tapas crawl"
+                    />
+                  </label>
                   <label className="text-sm lg:col-span-2">
                     Place, merchant, or description
                     <input
@@ -1029,6 +1117,59 @@ export default function ReceiptSplitApp() {
                       ))}
                     </select>
                   </label>
+                </div>
+
+                <div className="rounded-2xl border bg-white p-4">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h3 className="font-semibold">Who paid the check</h3>
+                      <p className="text-sm text-slate-500">
+                        Leave this empty for one payer above, or add each person who paid part of a large group check.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={addPayment}
+                      className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                    >
+                      Add payer
+                    </button>
+                  </div>
+                  {(activeReceipt.payments || []).length ? (
+                    <div className="mt-3 space-y-2">
+                      {(activeReceipt.payments || []).map((payment) => (
+                        <div key={payment.id} className="grid gap-2 rounded-2xl bg-slate-50 p-3 md:grid-cols-[1fr_1fr_auto]">
+                          <select
+                            className="rounded-xl border px-3 py-2"
+                            value={payment.person}
+                            onChange={(event) => updatePayment(payment.id, { person: event.target.value })}
+                          >
+                            {project.participants.map((person) => (
+                              <option key={person}>{person}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="number"
+                            className="rounded-xl border px-3 py-2"
+                            value={payment.amount}
+                            onChange={(event) => updatePayment(payment.id, { amount: event.target.value })}
+                            placeholder="Amount paid"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removePayment(payment.id)}
+                            className="rounded-xl px-3 py-2 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
+                      <p className={`text-sm ${Math.abs(activePaymentDifference) < 0.01 ? "text-emerald-700" : "text-amber-700"}`}>
+                        Entered payments: {money(activePaymentTotal, activeReceipt.baseCurrency)}. Expense total:{" "}
+                        {money(activeCalculations.total, activeReceipt.baseCurrency)}.
+                      </p>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="rounded-2xl border bg-slate-50 p-3">

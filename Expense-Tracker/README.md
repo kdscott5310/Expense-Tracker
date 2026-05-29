@@ -92,6 +92,17 @@ To save trips under a logged-in user and load previous trips from the dropdown:
 
 The migration only adds `owner_id` and `trip_code` to `projects`; it does not delete or recreate receipt data.
 
+### Trip Expense Metadata
+
+Run `supabase-trip-expense-metadata.sql` to add optional fields for comprehensive trips:
+
+- expense date
+- trip stop or city
+- activity
+- multiple payers on one expense/check
+
+Older expenses still work. If no payment rows are entered, the app uses the single **Paid by** person for the full expense total.
+
 ## Gemini Receipt Parsing
 
 Receipt itemization is handled by a Vercel serverless function at `api/parse-receipt.js`.
