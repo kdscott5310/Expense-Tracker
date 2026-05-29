@@ -16,6 +16,17 @@ function itemId(item) {
   return isUuid(item.id) ? item.id : crypto.randomUUID();
 }
 
+export function createTripCode(name = "trip") {
+  const slug = name
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 14);
+  const suffix = crypto.randomUUID().slice(0, 6).toUpperCase();
+  return `${slug || "TRIP"}-${suffix}`;
+}
+
 export function getProjectIdFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get("project");
@@ -24,6 +35,12 @@ export function getProjectIdFromUrl() {
 export function setProjectIdInUrl(id) {
   const url = new URL(window.location.href);
   url.searchParams.set("project", id);
+  window.history.replaceState({}, "", url);
+}
+
+export function clearProjectIdInUrl() {
+  const url = new URL(window.location.href);
+  url.searchParams.delete("project");
   window.history.replaceState({}, "", url);
 }
 
@@ -39,6 +56,19 @@ export async function findProjectIdByName(name) {
 
   if (error) throw error;
   return data?.[0]?.id || null;
+}
+
+export async function listUserProjects(userId) {
+  if (!userId) return [];
+
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id, name, trip_code")
+    .eq("owner_id", userId)
+    .order("name");
+
+  if (error) throw error;
+  return data || [];
 }
 
 export async function loadProjectFromSupabase(id) {
@@ -68,6 +98,7 @@ export async function loadProjectFromSupabase(id) {
   return {
     id: project.id,
     name: project.name,
+    tripCode: project.trip_code || "",
     settlementCurrency: project.settlement_currency || "USD",
     exchangeRate: project.exchange_rate || 1,
     participants: members.map((member) => member.name),
@@ -94,8 +125,9 @@ export async function loadProjectFromSupabase(id) {
   };
 }
 
-export async function saveProjectToSupabase(project) {
+export async function saveProjectToSupabase(project, options = {}) {
   const id = projectId(project);
+  const tripCode = project.tripCode || (options.userId ? createTripCode(project.name) : "");
   const receiptsWithIds = project.receipts.map((receipt) => ({
     ...receipt,
     id: receiptId(receipt),
@@ -105,12 +137,17 @@ export async function saveProjectToSupabase(project) {
     })),
   }));
 
-  const { error: projectError } = await supabase.from("projects").upsert({
+  const projectRow = {
     id,
     name: project.name,
     settlement_currency: project.settlementCurrency,
     exchange_rate: Number(project.exchangeRate || 1),
-  });
+  };
+
+  if (options.userId) projectRow.owner_id = options.userId;
+  if (tripCode) projectRow.trip_code = tripCode;
+
+  const { error: projectError } = await supabase.from("projects").upsert(projectRow);
 
   if (projectError) throw projectError;
 
@@ -181,6 +218,7 @@ export async function saveProjectToSupabase(project) {
   return {
     ...project,
     id,
+    tripCode,
     receipts: receiptsWithIds,
   };
 }

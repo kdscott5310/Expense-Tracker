@@ -2,8 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
 import {
+  clearProjectIdInUrl,
+  createTripCode,
   findProjectIdByName,
   getProjectIdFromUrl,
+  listUserProjects,
   loadProjectFromSupabase,
   saveProjectToSupabase,
   setProjectIdInUrl,
@@ -52,6 +55,7 @@ function createInitialProject() {
   return {
     id: crypto.randomUUID(),
     name: "Barcelona trip",
+    tripCode: "",
     participants: defaultParticipants,
     settlementCurrency: "USD",
     exchangeRate: 1.08,
@@ -135,6 +139,13 @@ export default function ReceiptSplitApp() {
   const [isSharedProject, setIsSharedProject] = useState(Boolean(urlProjectId));
   const [sharedProjectLoaded, setSharedProjectLoaded] = useState(!urlProjectId);
   const [parserMode, setParserMode] = useState("ai-image");
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authStatus, setAuthStatus] = useState("");
+  const [currentUser, setCurrentUser] = useState(null);
+  const [userProjects, setUserProjects] = useState([]);
+  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [tripListStatus, setTripListStatus] = useState("");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
@@ -142,6 +153,7 @@ export default function ReceiptSplitApp() {
     applyingRemoteProjectRef.current = true;
     setProject(loadedProject);
     setActiveReceiptId(loadedProject.receipts[0]?.id);
+    setSelectedProjectId(loadedProject.id);
     setProjectIdInUrl(loadedProject.id);
     setIsSharedProject(true);
     setSharedProjectLoaded(true);
@@ -151,6 +163,52 @@ export default function ReceiptSplitApp() {
   useEffect(() => {
     window.localStorage.setItem(storageKey, JSON.stringify(project));
   }, [project]);
+
+  const refreshUserProjects = useCallback(
+    async (userId = currentUser?.id) => {
+      if (!userId || !hasSupabaseConfig || !supabase) {
+        setUserProjects([]);
+        setSelectedProjectId("");
+        return;
+      }
+
+      try {
+        const projects = await listUserProjects(userId);
+        setUserProjects(projects);
+        setSelectedProjectId((currentId) =>
+          projects.some((savedProject) => savedProject.id === currentId) ? currentId : projects[0]?.id || "",
+        );
+        setTripListStatus(projects.length ? "Saved trips loaded." : "No saved trips yet.");
+      } catch (error) {
+        setTripListStatus(`Could not load trips: ${error.message}`);
+      }
+    },
+    [currentUser?.id],
+  );
+
+  useEffect(() => {
+    if (!hasSupabaseConfig || !supabase) return undefined;
+
+    let active = true;
+
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setCurrentUser(data.session?.user || null);
+    });
+
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+      setCurrentUser(session?.user || null);
+    });
+
+    return () => {
+      active = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    Promise.resolve().then(() => refreshUserProjects(currentUser?.id));
+  }, [currentUser?.id, refreshUserProjects]);
 
   useEffect(() => {
     const id = getProjectIdFromUrl();
@@ -228,7 +286,7 @@ export default function ReceiptSplitApp() {
       setShareStatus("Auto-syncing shared project...");
 
       try {
-        const savedProject = await saveProjectToSupabase(project);
+        const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
         if (savedProject.id !== project.id) {
           applyingRemoteProjectRef.current = true;
           setProject(savedProject);
@@ -245,7 +303,7 @@ export default function ReceiptSplitApp() {
     return () => {
       window.clearTimeout(autoSyncTimerRef.current);
     };
-  }, [isSharedProject, project, sharedProjectLoaded]);
+  }, [currentUser?.id, isSharedProject, project, sharedProjectLoaded]);
 
   const updateProject = (patch) => {
     setProject((current) => ({ ...current, ...patch }));
@@ -452,6 +510,79 @@ export default function ReceiptSplitApp() {
     }
   };
 
+  const signIn = async () => {
+    setAuthStatus("");
+
+    if (!hasSupabaseConfig || !supabase) {
+      setAuthStatus("Add Supabase environment variables before signing in.");
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+
+    setAuthStatus(error ? `Sign in failed: ${error.message}` : "Signed in.");
+  };
+
+  const createAccount = async () => {
+    setAuthStatus("");
+
+    if (!hasSupabaseConfig || !supabase) {
+      setAuthStatus("Add Supabase environment variables before creating an account.");
+      return;
+    }
+
+    const { error } = await supabase.auth.signUp({
+      email: authEmail.trim(),
+      password: authPassword,
+    });
+
+    setAuthStatus(error ? `Account creation failed: ${error.message}` : "Account created. Check your email if confirmation is enabled.");
+  };
+
+  const signOut = async () => {
+    if (!supabase) return;
+    await supabase.auth.signOut();
+    setCurrentUser(null);
+    setUserProjects([]);
+    setSelectedProjectId("");
+    setAuthStatus("Signed out.");
+  };
+
+  const loadSelectedTrip = async () => {
+    if (!selectedProjectId) {
+      setTripListStatus("Choose a saved trip first.");
+      return;
+    }
+
+    try {
+      const loadedProject = await loadProjectFromSupabase(selectedProjectId);
+      applyLoadedProject(loadedProject, "Loaded saved trip.");
+      setTripListStatus("Saved trip loaded.");
+    } catch (error) {
+      setTripListStatus(`Could not load saved trip: ${error.message}`);
+    }
+  };
+
+  const startNewTrip = () => {
+    const nextProject = {
+      ...createInitialProject(),
+      name: "New trip",
+      tripCode: createTripCode("New trip"),
+    };
+    applyingRemoteProjectRef.current = true;
+    setProject(nextProject);
+    setActiveReceiptId(nextProject.receipts[0]?.id);
+    clearProjectIdInUrl();
+    setIsSharedProject(false);
+    setSharedProjectLoaded(true);
+    setSelectedProjectId("");
+    setShareStatus("New local trip started. Sync to save it to your account.");
+    setSaveStatus("");
+  };
+
   const saveProject = async () => {
     setSaveStatus("");
 
@@ -472,7 +603,7 @@ export default function ReceiptSplitApp() {
         return;
       }
 
-      if (!isSharedProject) {
+      if (!isSharedProject && !currentUser) {
         const existingProjectId = await findProjectIdByName(project.name);
         if (existingProjectId && existingProjectId !== project.id) {
           const loadedProject = await loadProjectFromSupabase(existingProjectId);
@@ -482,14 +613,16 @@ export default function ReceiptSplitApp() {
         }
       }
 
-      const savedProject = await saveProjectToSupabase(project);
+      const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
       applyingRemoteProjectRef.current = true;
       setProject(savedProject);
+      setSelectedProjectId(savedProject.id);
       setProjectIdInUrl(savedProject.id);
       setIsSharedProject(true);
       setSharedProjectLoaded(true);
       setShareStatus("Share link is active. Others can open this URL and add receipts.");
-      setSaveStatus("Project synced to Supabase.");
+      setSaveStatus(currentUser ? "Trip saved to your account and synced to Supabase." : "Project synced to Supabase.");
+      await refreshUserProjects(currentUser?.id);
     } catch (error) {
       setSaveStatus(`Save failed: ${error.message}`);
     } finally {
@@ -542,6 +675,15 @@ export default function ReceiptSplitApp() {
               onChange={(event) => updateProject({ name: event.target.value })}
               aria-label="Project name"
             />
+            <label className="block max-w-sm text-sm text-slate-600">
+              Trip code
+              <input
+                className="mt-1 w-full rounded-2xl border px-3 py-2 font-mono text-sm"
+                value={project.tripCode || ""}
+                onChange={(event) => updateProject({ tripCode: event.target.value.trim().toUpperCase() })}
+                placeholder="Auto-created on sync"
+              />
+            </label>
             <p className="max-w-2xl text-slate-600">
               Nest restaurants, ride shares, hotels, and one-off expenses under one trip or event, then settle the whole project.
             </p>
@@ -561,6 +703,93 @@ export default function ReceiptSplitApp() {
             </div>
           </div>
         </header>
+
+        <section className="grid gap-3 rounded-3xl bg-white p-5 shadow-sm lg:grid-cols-[1fr_1.4fr]">
+          <div>
+            <h2 className="text-xl font-semibold">Account trips</h2>
+            <p className="text-sm text-slate-500">Sign in to save trips to your account and load them from any device.</p>
+            {authStatus ? <p className="mt-2 text-sm text-slate-700">{authStatus}</p> : null}
+          </div>
+
+          {currentUser ? (
+            <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto_auto] lg:items-end">
+              <label className="text-sm">
+                Saved trip
+                <select
+                  className="mt-1 w-full rounded-2xl border px-3 py-2"
+                  value={selectedProjectId}
+                  onChange={(event) => setSelectedProjectId(event.target.value)}
+                >
+                  <option value="">Choose trip</option>
+                  {userProjects.map((savedProject) => (
+                    <option key={savedProject.id} value={savedProject.id}>
+                      {savedProject.name} {savedProject.trip_code ? `(${savedProject.trip_code})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={loadSelectedTrip}
+                className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+              >
+                Load trip
+              </button>
+              <button
+                type="button"
+                onClick={startNewTrip}
+                className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+              >
+                New trip
+              </button>
+              <button
+                type="button"
+                onClick={signOut}
+                className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Sign out
+              </button>
+              <p className="text-sm text-slate-500 lg:col-span-4">
+                Signed in as {currentUser.email}. {tripListStatus}
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-3 lg:grid-cols-[1fr_1fr_auto_auto] lg:items-end">
+              <label className="text-sm">
+                Email
+                <input
+                  type="email"
+                  className="mt-1 w-full rounded-2xl border px-3 py-2"
+                  value={authEmail}
+                  onChange={(event) => setAuthEmail(event.target.value)}
+                />
+              </label>
+              <label className="text-sm">
+                Password
+                <input
+                  type="password"
+                  className="mt-1 w-full rounded-2xl border px-3 py-2"
+                  value={authPassword}
+                  onChange={(event) => setAuthPassword(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={signIn}
+                className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+              >
+                Sign in
+              </button>
+              <button
+                type="button"
+                onClick={createAccount}
+                className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Create account
+              </button>
+            </div>
+          )}
+        </section>
 
         <section className="flex flex-col gap-3 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>

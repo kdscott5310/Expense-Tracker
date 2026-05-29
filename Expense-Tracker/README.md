@@ -80,6 +80,18 @@ Add the same environment variables in Vercel project settings before deploying.
 
 For public shared links, turn off Vercel Deployment Protection for the production deployment. Otherwise collaborators may see a Vercel login screen instead of the app.
 
+### Account Trips
+
+To save trips under a logged-in user and load previous trips from the dropdown:
+
+1. Enable Supabase Auth with email/password in the Supabase dashboard.
+2. Run `supabase-account-trips.sql` in the Supabase SQL editor.
+3. Sign in inside the app.
+4. Click **Sync shared project** to save the current trip to your account.
+5. Use **Saved trip** > **Load trip** to reopen it later from any device.
+
+The migration only adds `owner_id` and `trip_code` to `projects`; it does not delete or recreate receipt data.
+
 ## Gemini Receipt Parsing
 
 Receipt itemization is handled by a Vercel serverless function at `api/parse-receipt.js`.
