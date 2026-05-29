@@ -16,6 +16,10 @@ function itemId(item) {
   return isUuid(item.id) ? item.id : crypto.randomUUID();
 }
 
+function isMissingColumnError(error) {
+  return /column .* does not exist|could not find .* column/i.test(error?.message || "");
+}
+
 export function createTripCode(name = "trip") {
   const slug = name
     .trim()
@@ -211,30 +215,44 @@ export async function saveProjectToSupabase(project, options = {}) {
   const receiptsToUpsert = receiptsWithIds.filter((receipt) => existingReceiptIds.has(receipt.id));
   const receiptsToInsert = receiptsWithIds.filter((receipt) => !existingReceiptIds.has(receipt.id));
 
-  const receiptRows = (receipts) =>
-    receipts.map((receipt) => ({
+  const receiptRows = (receipts, includeMetadata = true) =>
+    receipts.map((receipt) => {
+      const row = {
       id: receipt.id,
       project_id: id,
       place: receipt.place,
       merchant: receipt.merchant,
       receipt_type: receipt.receiptType,
       paid_by: receipt.paidBy,
-      expense_date: receipt.expenseDate || null,
-      trip_stop: receipt.tripStop || "",
-      activity: receipt.activity || "",
-      payments: receipt.payments || [],
       base_currency: receipt.baseCurrency,
       tax_tip: Number(receipt.taxTip || 0),
       ocr_text: receipt.ocrText,
-    }));
+      };
+
+      if (includeMetadata) {
+        row.expense_date = receipt.expenseDate || null;
+        row.trip_stop = receipt.tripStop || "";
+        row.activity = receipt.activity || "";
+        row.payments = receipt.payments || [];
+      }
+
+      return row;
+    });
+
+  let includeReceiptMetadata = true;
 
   if (receiptsToUpsert.length) {
-    const { error } = await supabase.from("receipts").upsert(receiptRows(receiptsToUpsert));
+    let { error } = await supabase.from("receipts").upsert(receiptRows(receiptsToUpsert, includeReceiptMetadata));
+    if (error && isMissingColumnError(error)) {
+      includeReceiptMetadata = false;
+      const retry = await supabase.from("receipts").upsert(receiptRows(receiptsToUpsert, includeReceiptMetadata));
+      error = retry.error;
+    }
     if (error) throw error;
   }
 
   if (receiptsToInsert.length) {
-    const { error } = await supabase.from("receipts").insert(receiptRows(receiptsToInsert));
+    const { error } = await supabase.from("receipts").insert(receiptRows(receiptsToInsert, includeReceiptMetadata));
     if (error) throw error;
   }
 
