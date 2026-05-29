@@ -5,9 +5,11 @@ import {
   clearProjectIdInUrl,
   createTripCode,
   findProjectIdByName,
+  findProjectIdByTripCode,
   getProjectIdFromUrl,
   listUserProjects,
   loadProjectFromSupabase,
+  normalizeTripCode,
   saveProjectToSupabase,
   setProjectIdInUrl,
 } from "./lib/projectStore";
@@ -151,6 +153,8 @@ export default function ReceiptSplitApp() {
   const [userProjects, setUserProjects] = useState([]);
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [tripListStatus, setTripListStatus] = useState("");
+  const [accessTripCode, setAccessTripCode] = useState(project.tripCode || "");
+  const [tripAccessStatus, setTripAccessStatus] = useState("");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
 
@@ -159,6 +163,7 @@ export default function ReceiptSplitApp() {
     setProject(loadedProject);
     setActiveReceiptId(loadedProject.receipts[0]?.id);
     setSelectedProjectId(loadedProject.id);
+    setAccessTripCode(loadedProject.tripCode || "");
     setProjectIdInUrl(loadedProject.id);
     setIsSharedProject(true);
     setSharedProjectLoaded(true);
@@ -616,10 +621,11 @@ export default function ReceiptSplitApp() {
   };
 
   const startNewTrip = () => {
+    const tripCode = normalizeTripCode(accessTripCode) || createTripCode("New trip");
     const nextProject = {
       ...createInitialProject(),
       name: "New trip",
-      tripCode: createTripCode("New trip"),
+      tripCode,
     };
     applyingRemoteProjectRef.current = true;
     setProject(nextProject);
@@ -628,8 +634,39 @@ export default function ReceiptSplitApp() {
     setIsSharedProject(false);
     setSharedProjectLoaded(true);
     setSelectedProjectId("");
-    setShareStatus("New local trip started. Sync to save it to your account.");
+    setAccessTripCode(tripCode);
+    setTripAccessStatus(`Started ${tripCode}. Sync to save it for the group.`);
+    setShareStatus("New local trip started. Sync to save it.");
     setSaveStatus("");
+  };
+
+  const loadTripByCode = async () => {
+    setTripAccessStatus("");
+
+    if (!hasSupabaseConfig || !supabase) {
+      setTripAccessStatus("Add Supabase environment variables before loading a trip code.");
+      return;
+    }
+
+    const cleanCode = normalizeTripCode(accessTripCode);
+    if (!cleanCode) {
+      setTripAccessStatus("Enter a trip code first.");
+      return;
+    }
+
+    try {
+      const projectId = await findProjectIdByTripCode(cleanCode);
+      if (!projectId) {
+        setTripAccessStatus(`No trip found for ${cleanCode}. Start a new trip with that code, then sync it.`);
+        return;
+      }
+
+      const loadedProject = await loadProjectFromSupabase(projectId);
+      applyLoadedProject(loadedProject, "Trip loaded by code.");
+      setTripAccessStatus(`Loaded ${cleanCode}.`);
+    } catch (error) {
+      setTripAccessStatus(`Trip code load failed: ${error.message}`);
+    }
   };
 
   const saveProject = async () => {
@@ -662,15 +699,18 @@ export default function ReceiptSplitApp() {
         }
       }
 
-      const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
+      const cleanCode = normalizeTripCode(project.tripCode || accessTripCode);
+      const projectToSave = cleanCode ? { ...project, tripCode: cleanCode } : project;
+      const savedProject = await saveProjectToSupabase(projectToSave, { userId: currentUser?.id });
       applyingRemoteProjectRef.current = true;
       setProject(savedProject);
       setSelectedProjectId(savedProject.id);
+      setAccessTripCode(savedProject.tripCode || "");
       setProjectIdInUrl(savedProject.id);
       setIsSharedProject(true);
       setSharedProjectLoaded(true);
       setShareStatus("Share link is active. Others can open this URL and add receipts.");
-      setSaveStatus(currentUser ? "Trip saved to your account and synced to Supabase." : "Project synced to Supabase.");
+      setSaveStatus(savedProject.tripCode ? `Trip ${savedProject.tripCode} synced to Supabase.` : "Project synced to Supabase.");
       await refreshUserProjects(currentUser?.id);
     } catch (error) {
       setSaveStatus(`Save failed: ${error.message}`);
@@ -724,15 +764,6 @@ export default function ReceiptSplitApp() {
               onChange={(event) => updateProject({ name: event.target.value })}
               aria-label="Project name"
             />
-            <label className="block max-w-sm text-sm text-slate-600">
-              Trip code
-              <input
-                className="mt-1 w-full rounded-2xl border px-3 py-2 font-mono text-sm"
-                value={project.tripCode || ""}
-                onChange={(event) => updateProject({ tripCode: event.target.value.trim().toUpperCase() })}
-                placeholder="Auto-created on sync"
-              />
-            </label>
             <p className="max-w-2xl text-slate-600">
               Nest restaurants, ride shares, hotels, and one-off expenses under one trip or event, then settle the whole project.
             </p>
@@ -753,7 +784,53 @@ export default function ReceiptSplitApp() {
           </div>
         </header>
 
-        <section className="grid gap-3 rounded-3xl bg-white p-5 shadow-sm lg:grid-cols-[1fr_1.4fr]">
+        <section className="grid gap-4 rounded-3xl bg-white p-5 shadow-sm lg:grid-cols-[0.85fr_1.4fr]">
+          <div>
+            <h2 className="text-xl font-semibold">Trip code</h2>
+            <p className="text-sm text-slate-500">Use one code for the group so everyone opens the same saved trip.</p>
+            {tripAccessStatus ? <p className="mt-2 text-sm text-slate-700">{tripAccessStatus}</p> : null}
+          </div>
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto_auto] lg:items-end">
+            <label className="text-sm">
+              Code
+              <input
+                className="mt-1 w-full rounded-2xl border px-3 py-2 font-mono uppercase"
+                value={accessTripCode}
+                onChange={(event) => {
+                  const cleanCode = normalizeTripCode(event.target.value);
+                  setAccessTripCode(cleanCode);
+                  updateProject({ tripCode: cleanCode });
+                }}
+                placeholder="SPAIN-2026"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={loadTripByCode}
+              className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+            >
+              Load trip
+            </button>
+            <button
+              type="button"
+              onClick={startNewTrip}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+            >
+              New trip
+            </button>
+            <button
+              type="button"
+              onClick={saveProject}
+              className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+            >
+              Sync
+            </button>
+          </div>
+        </section>
+
+        <details className="rounded-3xl bg-white p-5 shadow-sm">
+          <summary className="cursor-pointer text-sm font-semibold text-slate-600">Advanced account login</summary>
+          <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_1.4fr]">
           <div>
             <h2 className="text-xl font-semibold">Account trips</h2>
             <p className="text-sm text-slate-500">Sign in to save trips to your account and load them from any device.</p>
@@ -838,7 +915,8 @@ export default function ReceiptSplitApp() {
               </button>
             </div>
           )}
-        </section>
+          </div>
+        </details>
 
         <section className="flex flex-col gap-3 rounded-3xl bg-white p-5 shadow-sm md:flex-row md:items-center md:justify-between">
           <div>

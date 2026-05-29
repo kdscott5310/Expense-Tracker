@@ -27,6 +27,14 @@ export function createTripCode(name = "trip") {
   return `${slug || "TRIP"}-${suffix}`;
 }
 
+export function normalizeTripCode(code = "") {
+  return code
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9-]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
 export function getProjectIdFromUrl() {
   const params = new URLSearchParams(window.location.search);
   return params.get("project");
@@ -52,6 +60,20 @@ export async function findProjectIdByName(name) {
     .from("projects")
     .select("id")
     .eq("name", cleanName)
+    .limit(1);
+
+  if (error) throw error;
+  return data?.[0]?.id || null;
+}
+
+export async function findProjectIdByTripCode(code) {
+  const cleanCode = normalizeTripCode(code);
+  if (!cleanCode) return null;
+
+  const { data, error } = await supabase
+    .from("projects")
+    .select("id")
+    .eq("trip_code", cleanCode)
     .limit(1);
 
   if (error) throw error;
@@ -131,7 +153,7 @@ export async function loadProjectFromSupabase(id) {
 
 export async function saveProjectToSupabase(project, options = {}) {
   const id = projectId(project);
-  const tripCode = project.tripCode || (options.userId ? createTripCode(project.name) : "");
+  const tripCode = normalizeTripCode(project.tripCode || (options.userId ? createTripCode(project.name) : ""));
   const receiptsWithIds = project.receipts.map((receipt) => ({
     ...receipt,
     id: receiptId(receipt),

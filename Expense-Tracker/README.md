@@ -80,9 +80,13 @@ Add the same environment variables in Vercel project settings before deploying.
 
 For public shared links, turn off Vercel Deployment Protection for the production deployment. Otherwise collaborators may see a Vercel login screen instead of the app.
 
+### Trip Codes
+
+The main sharing flow uses a trip code. Pick one memorable code for the group, such as `SPAIN-2026`, then use **Load trip** to reopen it and **Sync** to save changes back to Supabase.
+
 ### Account Trips
 
-To save trips under a logged-in user and load previous trips from the dropdown:
+Account login is available in the advanced section, but it is optional for group-trip tracking. To save trips under a logged-in user and load previous trips from the dropdown:
 
 1. Enable Supabase Auth with email/password in the Supabase dashboard.
 2. Run `supabase-account-trips.sql` in the Supabase SQL editor.
