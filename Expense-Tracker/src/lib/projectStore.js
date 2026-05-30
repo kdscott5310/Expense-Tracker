@@ -128,6 +128,7 @@ export async function loadProjectFromSupabase(id) {
     serverSyncedAt: project.last_synced_at || project.created_at || "",
     settlementCurrency: project.settlement_currency || "USD",
     exchangeRate: project.exchange_rate || 1,
+    settlementGroups: Array.isArray(project.settlement_groups) ? project.settlement_groups : undefined,
     participants: members.map((member) => member.name),
     receipts: receipts.map((receipt) => ({
       id: receipt.id,
@@ -174,6 +175,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     name: project.name,
     settlement_currency: project.settlementCurrency,
     exchange_rate: Number(project.exchangeRate || 1),
+    settlement_groups: project.settlementGroups || [],
     last_synced_at: syncTimestamp,
   };
 
@@ -184,6 +186,12 @@ export async function saveProjectToSupabase(project, options = {}) {
 
   if (projectError && String(projectError.message || "").includes("last_synced_at")) {
     delete projectRow.last_synced_at;
+    const retry = await supabase.from("projects").upsert(projectRow);
+    projectError = retry.error;
+  }
+
+  if (projectError && isMissingColumnError(projectError)) {
+    delete projectRow.settlement_groups;
     const retry = await supabase.from("projects").upsert(projectRow);
     projectError = retry.error;
   }
@@ -277,6 +285,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     id,
     tripCode,
     serverSyncedAt: projectRow.last_synced_at || project.serverSyncedAt || "",
+    settlementGroups: project.settlementGroups || [],
     receipts: receiptsWithIds,
   };
 }

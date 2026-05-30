@@ -73,9 +73,35 @@ function createInitialProject() {
     name: "Barcelona trip",
     tripCode: "",
     participants: defaultParticipants,
+    settlementGroups: [],
     settlementCurrency: "USD",
     exchangeRate: 1.08,
     receipts: [createReceipt()],
+  };
+}
+
+function fallbackSettlementGroups(participants = []) {
+  return defaultSettlementGroups.filter((group) => group.members.every((member) => participants.includes(member)));
+}
+
+function normalizeSettlementGroups(project) {
+  const hasSavedGroups = Array.isArray(project.settlementGroups);
+  const savedGroups = hasSavedGroups ? project.settlementGroups : [];
+  const groups = hasSavedGroups ? savedGroups : fallbackSettlementGroups(project.participants);
+
+  return groups
+    .map((group) => ({
+      id: group.id || crypto.randomUUID(),
+      name: group.name || "Settlement group",
+      members: [...new Set((group.members || []).filter((member) => project.participants.includes(member)))],
+    }))
+    .filter((group) => group.members.length > 0);
+}
+
+function normalizeProject(project) {
+  return {
+    ...project,
+    settlementGroups: normalizeSettlementGroups(project),
   };
 }
 
@@ -87,7 +113,7 @@ function loadInitialProject() {
     if (!stored) return createInitialProject();
     const parsed = JSON.parse(stored);
     if (!parsed.receipts?.length) return createInitialProject();
-    return parsed;
+    return normalizeProject(parsed);
   } catch {
     return createInitialProject();
   }
@@ -112,12 +138,7 @@ function formatServerTime(value) {
 }
 
 function getActiveSettlementGroups(project) {
-  return defaultSettlementGroups
-    .map((group) => ({
-      ...group,
-      members: group.members.filter((member) => project.participants.includes(member)),
-    }))
-    .filter((group) => group.members.length > 1);
+  return normalizeSettlementGroups(project).filter((group) => group.members.length > 1);
 }
 
 function calculateProjectSplit(project) {
@@ -185,17 +206,19 @@ export default function ReceiptSplitApp() {
   const [accessTripCode, setAccessTripCode] = useState(project.tripCode || "");
   const [tripAccessStatus, setTripAccessStatus] = useState("");
   const [settlementMode, setSettlementMode] = useState("groups");
+  const [newSettlementGroupName, setNewSettlementGroupName] = useState("");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
   const serverSyncLabel = formatServerTime(project.serverSyncedAt);
 
   const applyLoadedProject = useCallback((loadedProject, status = "Shared project loaded.") => {
     applyingRemoteProjectRef.current = true;
-    setProject(loadedProject);
+    const normalizedProject = normalizeProject(loadedProject);
+    setProject(normalizedProject);
     setActiveReceiptId(loadedProject.receipts[0]?.id);
-    setSelectedProjectId(loadedProject.id);
-    setAccessTripCode(loadedProject.tripCode || "");
-    setProjectIdInUrl(loadedProject.id);
+    setSelectedProjectId(normalizedProject.id);
+    setAccessTripCode(normalizedProject.tripCode || "");
+    setProjectIdInUrl(normalizedProject.id);
     setIsSharedProject(true);
     setSharedProjectLoaded(true);
     setShareStatus(status);
@@ -284,10 +307,11 @@ export default function ReceiptSplitApp() {
       reloadTimer = window.setTimeout(async () => {
         try {
           const loadedProject = await loadProjectFromSupabase(id);
+          const normalizedProject = normalizeProject(loadedProject);
           applyingRemoteProjectRef.current = true;
-          setProject(loadedProject);
+          setProject(normalizedProject);
           setActiveReceiptId((currentId) =>
-            loadedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : loadedProject.receipts[0]?.id,
+            normalizedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : normalizedProject.receipts[0]?.id,
           );
           setSharedProjectLoaded(true);
           setShareStatus(`Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
@@ -328,12 +352,13 @@ export default function ReceiptSplitApp() {
 
       try {
         const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
+        const normalizedProject = normalizeProject(savedProject);
         applyingRemoteProjectRef.current = true;
-        setProject(savedProject);
-        if (savedProject.id !== project.id) {
-          setProjectIdInUrl(savedProject.id);
+        setProject(normalizedProject);
+        if (normalizedProject.id !== project.id) {
+          setProjectIdInUrl(normalizedProject.id);
         }
-        setShareStatus(`Auto-synced to server: ${formatServerTime(savedProject.serverSyncedAt)}.`);
+        setShareStatus(`Auto-synced to server: ${formatServerTime(normalizedProject.serverSyncedAt)}.`);
       } catch (error) {
         setShareStatus(`Auto-sync failed: ${error.message}`);
       } finally {
@@ -383,6 +408,9 @@ export default function ReceiptSplitApp() {
       return {
         ...current,
         participants,
+        settlementGroups: (current.settlementGroups || [])
+          .map((group) => ({ ...group, members: group.members.filter((member) => member !== name) }))
+          .filter((group) => group.members.length > 0),
         receipts: current.receipts.map((receipt) => ({
           ...receipt,
           paidBy: receipt.paidBy === name ? fallbackPayer : receipt.paidBy,
@@ -391,6 +419,51 @@ export default function ReceiptSplitApp() {
         })),
       };
     });
+  };
+
+  const addSettlementGroup = () => {
+    const cleanName = newSettlementGroupName.trim() || `Group ${(project.settlementGroups || []).length + 1}`;
+    setProject((current) => ({
+      ...current,
+      settlementGroups: [
+        ...(current.settlementGroups || []),
+        {
+          id: crypto.randomUUID(),
+          name: cleanName,
+          members: [],
+        },
+      ],
+    }));
+    setNewSettlementGroupName("");
+    setSettlementMode("groups");
+  };
+
+  const updateSettlementGroup = (groupId, patch) => {
+    setProject((current) => ({
+      ...current,
+      settlementGroups: (current.settlementGroups || []).map((group) => (group.id === groupId ? { ...group, ...patch } : group)),
+    }));
+  };
+
+  const removeSettlementGroup = (groupId) => {
+    setProject((current) => ({
+      ...current,
+      settlementGroups: (current.settlementGroups || []).filter((group) => group.id !== groupId),
+    }));
+  };
+
+  const toggleSettlementGroupMember = (groupId, person) => {
+    setProject((current) => ({
+      ...current,
+      settlementGroups: (current.settlementGroups || []).map((group) => {
+        if (group.id !== groupId) return { ...group, members: group.members.filter((member) => member !== person) };
+        const hasMember = group.members.includes(person);
+        return {
+          ...group,
+          members: hasMember ? group.members.filter((member) => member !== person) : [...group.members, person],
+        };
+      }),
+    }));
   };
 
   const addReceipt = (receiptType = "restaurant") => {
@@ -767,18 +840,19 @@ export default function ReceiptSplitApp() {
       const cleanCode = normalizeTripCode(project.tripCode || accessTripCode);
       const projectToSave = cleanCode ? { ...project, tripCode: cleanCode } : project;
       const savedProject = await saveProjectToSupabase(projectToSave, { userId: currentUser?.id });
+      const normalizedProject = normalizeProject(savedProject);
       applyingRemoteProjectRef.current = true;
-      setProject(savedProject);
-      setSelectedProjectId(savedProject.id);
-      setAccessTripCode(savedProject.tripCode || "");
-      setProjectIdInUrl(savedProject.id);
+      setProject(normalizedProject);
+      setSelectedProjectId(normalizedProject.id);
+      setAccessTripCode(normalizedProject.tripCode || "");
+      setProjectIdInUrl(normalizedProject.id);
       setIsSharedProject(true);
       setSharedProjectLoaded(true);
-      setShareStatus(`Synced to server: ${formatServerTime(savedProject.serverSyncedAt)}.`);
+      setShareStatus(`Synced to server: ${formatServerTime(normalizedProject.serverSyncedAt)}.`);
       setSaveStatus(
-        savedProject.tripCode
-          ? `Trip ${savedProject.tripCode} synced to Supabase at ${formatServerTime(savedProject.serverSyncedAt)}.`
-          : `Project synced to Supabase at ${formatServerTime(savedProject.serverSyncedAt)}.`,
+        normalizedProject.tripCode
+          ? `Trip ${normalizedProject.tripCode} synced to Supabase at ${formatServerTime(normalizedProject.serverSyncedAt)}.`
+          : `Project synced to Supabase at ${formatServerTime(normalizedProject.serverSyncedAt)}.`,
       );
       await refreshUserProjects(currentUser?.id);
     } catch (error) {
@@ -1136,6 +1210,74 @@ export default function ReceiptSplitApp() {
                       </button>
                     </div>
                   ))}
+                </div>
+                <div className="border-t pt-4">
+                  <div className="mb-3">
+                    <h3 className="font-semibold">Settlement groups</h3>
+                    <p className="text-sm text-slate-500">Group couples, families, or anyone settling together.</p>
+                  </div>
+                  <div className="mb-3 flex gap-2">
+                    <input
+                      className="w-full rounded-2xl border px-3 py-2"
+                      placeholder="Group name"
+                      value={newSettlementGroupName}
+                      onChange={(event) => setNewSettlementGroupName(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") addSettlementGroup();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={addSettlementGroup}
+                      className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                    >
+                      Add
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {(project.settlementGroups || []).length === 0 ? (
+                      <div className="rounded-2xl bg-slate-50 p-3 text-sm text-slate-500">
+                        No settlement groups. Add one to combine people in the final settlement.
+                      </div>
+                    ) : (
+                      (project.settlementGroups || []).map((group) => (
+                        <div key={group.id} className="rounded-2xl bg-slate-100 p-3">
+                          <div className="mb-2 flex gap-2">
+                            <input
+                              className="w-full rounded-xl border px-3 py-2 text-sm"
+                              value={group.name}
+                              onChange={(event) => updateSettlementGroup(group.id, { name: event.target.value })}
+                              aria-label="Settlement group name"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeSettlementGroup(group.id)}
+                              className="rounded-xl px-2 py-1 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {project.participants.map((person) => {
+                              const isSelected = group.members.includes(person);
+                              return (
+                                <button
+                                  type="button"
+                                  key={person}
+                                  onClick={() => toggleSettlementGroupMember(group.id, person)}
+                                  className={`rounded-full px-3 py-1 text-xs ${
+                                    isSelected ? "bg-slate-900 text-white" : "bg-white text-slate-700"
+                                  }`}
+                                >
+                                  {person}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
