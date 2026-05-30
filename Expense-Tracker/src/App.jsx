@@ -186,6 +186,50 @@ function calculateProjectSplit(project) {
   };
 }
 
+function buildParticipantAudit(project, projectCalculations, person) {
+  const receiptAudits = projectCalculations.receiptSummaries
+    .map(({ receipt, calculations }) => {
+      const multiplier = 1 + Number(receipt.taxTip || 0) / 100;
+      const itemCharges = receipt.items
+        .map((item) => {
+          const sharedBy = item.sharedBy.length ? item.sharedBy : project.participants;
+          if (!sharedBy.includes(person)) return null;
+
+          return {
+            id: item.id,
+            name: item.name,
+            category: item.category,
+            sharedCount: sharedBy.length,
+            amount: (Number(item.amount || 0) * multiplier) / sharedBy.length,
+          };
+        })
+        .filter(Boolean);
+      const owed = calculations.owedByPerson[person] || 0;
+      const paid = calculations.paidByPerson[person] || 0;
+
+      if (owed <= 0.01 && paid <= 0.01 && itemCharges.length === 0) return null;
+
+      return {
+        receipt,
+        owed,
+        paid,
+        net: paid - owed,
+        itemCharges,
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    person,
+    owed: projectCalculations.owedByPerson[person] || 0,
+    paid: projectCalculations.paidByPerson[person] || 0,
+    net: projectCalculations.netByPerson[person] || 0,
+    receiptAudits,
+    sentPayments: (project.settlementPayments || []).filter((payment) => payment.from === person),
+    receivedPayments: (project.settlementPayments || []).filter((payment) => payment.to === person),
+  };
+}
+
 export default function ReceiptSplitApp() {
   const fileInputRef = useRef(null);
   const applyingRemoteProjectRef = useRef(false);
@@ -211,6 +255,7 @@ export default function ReceiptSplitApp() {
   const [tripAccessStatus, setTripAccessStatus] = useState("");
   const [settlementMode, setSettlementMode] = useState("groups");
   const [newSettlementGroupName, setNewSettlementGroupName] = useState("");
+  const [auditPerson, setAuditPerson] = useState(project.participants[0] || "");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
   const serverSyncLabel = formatServerTime(project.serverSyncedAt);
@@ -619,6 +664,11 @@ export default function ReceiptSplitApp() {
   );
 
   const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
+  const activeAuditPerson = project.participants.includes(auditPerson) ? auditPerson : project.participants[0] || "";
+  const participantAudit = useMemo(
+    () => buildParticipantAudit(project, projectCalculations, activeAuditPerson),
+    [activeAuditPerson, project, projectCalculations],
+  );
 
   const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
   const displayedSettlements =
@@ -1722,6 +1772,98 @@ export default function ReceiptSplitApp() {
               </div>
 
               <div className="rounded-3xl bg-white shadow-sm">
+                <div className="space-y-4 p-5">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <SectionIcon>AU</SectionIcon>
+                      <h2 className="text-xl font-semibold">Charge audit</h2>
+                    </div>
+                    <select
+                      className="rounded-2xl border px-3 py-2 text-sm"
+                      value={activeAuditPerson}
+                      onChange={(event) => setAuditPerson(event.target.value)}
+                    >
+                      {project.participants.map((person) => (
+                        <option key={person}>{person}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm text-slate-600">
+                    <div className="rounded-xl bg-slate-100 p-3">
+                      <p>Used</p>
+                      <p className="font-semibold text-slate-900">{money(participantAudit.owed, activeReceipt.baseCurrency)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-100 p-3">
+                      <p>Paid</p>
+                      <p className="font-semibold text-slate-900">{money(participantAudit.paid, activeReceipt.baseCurrency)}</p>
+                    </div>
+                    <div className="rounded-xl bg-slate-100 p-3">
+                      <p>{participantAudit.net >= 0 ? "Gets back" : "Owes"}</p>
+                      <p className="font-semibold text-slate-900">{money(Math.abs(participantAudit.net), activeReceipt.baseCurrency)}</p>
+                    </div>
+                  </div>
+                  <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                    {participantAudit.receiptAudits.length === 0 ? (
+                      <div className="rounded-2xl bg-green-50 p-4 text-sm text-green-700">No charges found for this person.</div>
+                    ) : (
+                      participantAudit.receiptAudits.map(({ receipt, owed, paid, net, itemCharges }) => (
+                        <div key={receipt.id} className="rounded-2xl border bg-white p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold">{receipt.place}</p>
+                              <p className="text-xs text-slate-500">
+                                {[receipt.expenseDate, receipt.tripStop, receipt.activity].filter(Boolean).join(" | ") ||
+                                  expenseTypeLabel(receipt.receiptType)}
+                              </p>
+                            </div>
+                            <div className="text-right text-sm">
+                              <p>Used {money(owed, receipt.baseCurrency)}</p>
+                              {paid > 0 && <p className="text-emerald-700">Paid {money(paid, receipt.baseCurrency)}</p>}
+                              {Math.abs(net) > 0.01 && (
+                                <p className={net >= 0 ? "text-emerald-700" : "text-red-700"}>
+                                  {net >= 0 ? "Net +" : "Net -"}
+                                  {money(Math.abs(net), receipt.baseCurrency)}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {itemCharges.length > 0 && (
+                            <div className="mt-3 space-y-2">
+                              {itemCharges.map((item) => (
+                                <div key={item.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-50 px-3 py-2 text-sm">
+                                  <div>
+                                    <p className="font-medium">{item.name}</p>
+                                    <p className="text-xs text-slate-500">
+                                      {item.category} split {item.sharedCount} ways
+                                    </p>
+                                  </div>
+                                  <span className="font-semibold">{money(item.amount, receipt.baseCurrency)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                  {(participantAudit.sentPayments.length > 0 || participantAudit.receivedPayments.length > 0) && (
+                    <div className="rounded-2xl bg-slate-50 p-4 text-sm">
+                      <p className="mb-2 font-semibold">Settlement payments recorded</p>
+                      {[...participantAudit.sentPayments, ...participantAudit.receivedPayments].map((payment) => (
+                        <div key={payment.id} className="flex justify-between gap-3 py-1 text-slate-700">
+                          <span>
+                            {payment.from} paid {payment.to}
+                            {payment.note ? ` for ${payment.note}` : ""}
+                          </span>
+                          <span className="font-semibold">{money(payment.amount, project.settlementCurrency)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-3xl bg-white shadow-sm lg:col-span-2">
                 <div className="space-y-4 p-5">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                     <div>
