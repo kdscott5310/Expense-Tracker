@@ -192,20 +192,28 @@ function buildParticipantAudit(project, projectCalculations, person) {
       const multiplier = 1 + Number(receipt.taxTip || 0) / 100;
       const itemCharges = receipt.items
         .map((item) => {
-          const sharedBy = item.sharedBy.length ? item.sharedBy : project.participants;
+          const itemSharedBy = Array.isArray(item.sharedBy) ? item.sharedBy : [];
+          const sharedBy = itemSharedBy.length ? itemSharedBy : project.participants;
           if (!sharedBy.includes(person)) return null;
+
+          const baseShare = Number(item.amount || 0) / sharedBy.length;
 
           return {
             id: item.id,
             name: item.name,
             category: item.category,
             sharedCount: sharedBy.length,
-            amount: (Number(item.amount || 0) * multiplier) / sharedBy.length,
+            baseAmount: baseShare,
+            feeAmount: baseShare * (multiplier - 1),
+            amount: baseShare * multiplier,
           };
         })
         .filter(Boolean);
       const owed = calculations.owedByPerson[person] || 0;
       const paid = calculations.paidByPerson[person] || 0;
+      const itemSubtotal = itemCharges.reduce((sum, item) => sum + item.baseAmount, 0);
+      const itemFeeTotal = itemCharges.reduce((sum, item) => sum + item.feeAmount, 0);
+      const roundingAdjustment = owed - itemSubtotal - itemFeeTotal;
 
       if (owed <= 0.01 && paid <= 0.01 && itemCharges.length === 0) return null;
 
@@ -214,16 +222,21 @@ function buildParticipantAudit(project, projectCalculations, person) {
         owed,
         paid,
         net: paid - owed,
+        itemSubtotal,
+        itemFeeTotal,
+        roundingAdjustment,
         itemCharges,
       };
     })
     .filter(Boolean);
+  const currencies = [...new Set(receiptAudits.map(({ receipt }) => receipt.baseCurrency || "USD"))];
 
   return {
     person,
     owed: projectCalculations.owedByPerson[person] || 0,
     paid: projectCalculations.paidByPerson[person] || 0,
     net: projectCalculations.netByPerson[person] || 0,
+    currency: currencies.length === 1 ? currencies[0] : "MULTI",
     receiptAudits,
     sentPayments: (project.settlementPayments || []).filter((payment) => payment.from === person),
     receivedPayments: (project.settlementPayments || []).filter((payment) => payment.to === person),
@@ -672,6 +685,7 @@ export default function ReceiptSplitApp() {
     () => buildParticipantAudit(project, projectCalculations, activeAuditPerson),
     [activeAuditPerson, project, projectCalculations],
   );
+  const auditSummaryCurrency = participantAudit.currency === "MULTI" ? activeReceipt.baseCurrency : participantAudit.currency;
 
   const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
   const effectiveSettlementMode = settlementMode === "groups" && activeSettlementGroups.length > 0 ? "groups" : "individual";
@@ -1795,22 +1809,27 @@ export default function ReceiptSplitApp() {
                   <div className="grid grid-cols-3 gap-2 text-sm text-slate-600">
                     <div className="rounded-xl bg-slate-100 p-3">
                       <p>Used</p>
-                      <p className="font-semibold text-slate-900">{money(participantAudit.owed, activeReceipt.baseCurrency)}</p>
+                      <p className="font-semibold text-slate-900">{money(participantAudit.owed, auditSummaryCurrency)}</p>
                     </div>
                     <div className="rounded-xl bg-slate-100 p-3">
                       <p>Paid</p>
-                      <p className="font-semibold text-slate-900">{money(participantAudit.paid, activeReceipt.baseCurrency)}</p>
+                      <p className="font-semibold text-slate-900">{money(participantAudit.paid, auditSummaryCurrency)}</p>
                     </div>
                     <div className="rounded-xl bg-slate-100 p-3">
                       <p>{participantAudit.net >= 0 ? "Gets back" : "Owes"}</p>
-                      <p className="font-semibold text-slate-900">{money(Math.abs(participantAudit.net), activeReceipt.baseCurrency)}</p>
+                      <p className="font-semibold text-slate-900">{money(Math.abs(participantAudit.net), auditSummaryCurrency)}</p>
                     </div>
                   </div>
-                  <div className="max-h-[34rem] space-y-3 overflow-y-auto pr-1">
+                  {participantAudit.currency === "MULTI" && (
+                    <div className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-800">
+                      This audit includes more than one receipt currency. Receipt rows show their own currency.
+                    </div>
+                  )}
+                  <div className="space-y-3">
                     {participantAudit.receiptAudits.length === 0 ? (
                       <div className="rounded-2xl bg-green-50 p-4 text-sm text-green-700">No charges found for this person.</div>
                     ) : (
-                      participantAudit.receiptAudits.map(({ receipt, owed, paid, net, itemCharges }) => (
+                      participantAudit.receiptAudits.map(({ receipt, owed, paid, net, itemCharges, itemSubtotal, itemFeeTotal, roundingAdjustment }) => (
                         <div key={receipt.id} className="rounded-2xl border bg-white p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div>
@@ -1839,11 +1858,30 @@ export default function ReceiptSplitApp() {
                                     <p className="font-medium">{item.name}</p>
                                     <p className="text-xs text-slate-500">
                                       {item.category} split {item.sharedCount} ways
+                                      {Math.abs(item.feeAmount) > 0.01
+                                        ? `, ${money(item.baseAmount, receipt.baseCurrency)} before fees`
+                                        : ""}
                                     </p>
                                   </div>
                                   <span className="font-semibold">{money(item.amount, receipt.baseCurrency)}</span>
                                 </div>
                               ))}
+                              {Math.abs(itemFeeTotal) > 0.01 && (
+                                <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-100 px-3 py-2 text-sm">
+                                  <span>Tax / tip / fees included above</span>
+                                  <span className="font-semibold">{money(itemFeeTotal, receipt.baseCurrency)}</span>
+                                </div>
+                              )}
+                              {Math.abs(roundingAdjustment) > 0.01 && (
+                                <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-100 px-3 py-2 text-sm">
+                                  <span>Rounding adjustment</span>
+                                  <span className="font-semibold">{money(roundingAdjustment, receipt.baseCurrency)}</span>
+                                </div>
+                              )}
+                              <div className="flex items-center justify-between gap-3 border-t pt-2 text-sm font-semibold">
+                                <span>Receipt audit total</span>
+                                <span>{money(itemSubtotal + itemFeeTotal + roundingAdjustment, receipt.baseCurrency)}</span>
+                              </div>
                             </div>
                           )}
                         </div>
