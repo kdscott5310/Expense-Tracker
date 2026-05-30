@@ -64,6 +64,53 @@ export function distributeDebtsProportionally(netByPerson) {
   );
 }
 
+export function calculatePayerReimbursements(receiptSummaries, participants) {
+  const directedDebts = new Map();
+
+  const addDebt = (from, to, amount) => {
+    if (!from || !to || from === to || amount <= 0.01) return;
+    const key = `${from}\u0000${to}`;
+    directedDebts.set(key, (directedDebts.get(key) || 0) + amount);
+  };
+
+  receiptSummaries.forEach(({ calculations }) => {
+    const payers = participants
+      .map((person) => ({ person, amount: calculations.paidByPerson[person] || 0 }))
+      .filter((payer) => payer.amount > 0.01);
+    const totalPaid = payers.reduce((sum, payer) => sum + payer.amount, 0);
+
+    if (!totalPaid) return;
+
+    participants.forEach((debtor) => {
+      const owed = calculations.owedByPerson[debtor] || 0;
+      if (owed <= 0.01) return;
+
+      payers.forEach((payer) => {
+        addDebt(debtor, payer.person, (owed * payer.amount) / totalPaid);
+      });
+    });
+  });
+
+  const settlements = [];
+  const handledPairs = new Set();
+
+  directedDebts.forEach((amount, key) => {
+    const [from, to] = key.split("\u0000");
+    const pairKey = [from, to].sort().join("\u0000");
+    if (handledPairs.has(pairKey)) return;
+
+    const reverseAmount = directedDebts.get(`${to}\u0000${from}`) || 0;
+    const netAmount = amount - reverseAmount;
+
+    if (netAmount > 0.01) settlements.push({ from, to, amount: netAmount });
+    if (netAmount < -0.01) settlements.push({ from: to, to: from, amount: Math.abs(netAmount) });
+
+    handledPairs.add(pairKey);
+  });
+
+  return settlements.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+}
+
 export function calculateReceiptSplit({ items, participants, paidBy, taxTip, payments = [] }) {
   const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const multiplier = 1 + Number(taxTip || 0) / 100;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { calculateReceiptSplit, currencySymbols, distributeDebtsProportionally, money } from "./lib/calculations";
+import { calculatePayerReimbursements, calculateReceiptSplit, currencySymbols, money } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
 import {
   clearProjectIdInUrl,
@@ -137,7 +137,7 @@ function calculateProjectSplit(project) {
     owedByPerson,
     paidByPerson,
     netByPerson,
-    settlements: distributeDebtsProportionally(netByPerson),
+    settlements: calculatePayerReimbursements(receiptSummaries, project.participants),
     receiptSummaries,
   };
 }
@@ -1506,7 +1506,7 @@ export default function ReceiptSplitApp() {
                 <div className="space-y-4 p-5">
                   <h2 className="text-xl font-semibold">Project settlement</h2>
                   <p className="text-sm text-slate-500">
-                    Each person who owes money pays it back across everyone who is net-positive from paying trip expenses.
+                    Each person pays back the people who paid for the specific meals, rides, and expenses they shared.
                   </p>
                   <p className={`text-sm ${Math.abs(projectNetTotal) < 0.01 ? "text-emerald-700" : "text-amber-700"}`}>
                     Balance check:{" "}
