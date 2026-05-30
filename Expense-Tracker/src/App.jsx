@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  applyRecordedSettlementPayments,
   calculatePayerReimbursements,
   calculateReceiptSplit,
   currencySymbols,
@@ -74,6 +75,7 @@ function createInitialProject() {
     tripCode: "",
     participants: defaultParticipants,
     settlementGroups: [],
+    settlementPayments: [],
     settlementCurrency: "USD",
     exchangeRate: 1.08,
     receipts: [createReceipt()],
@@ -102,6 +104,7 @@ function normalizeProject(project) {
   return {
     ...project,
     settlementGroups: normalizeSettlementGroups(project),
+    settlementPayments: Array.isArray(project.settlementPayments) ? project.settlementPayments : [],
   };
 }
 
@@ -411,6 +414,7 @@ export default function ReceiptSplitApp() {
         settlementGroups: (current.settlementGroups || [])
           .map((group) => ({ ...group, members: group.members.filter((member) => member !== name) }))
           .filter((group) => group.members.length > 0),
+        settlementPayments: (current.settlementPayments || []).filter((payment) => payment.from !== name && payment.to !== name),
         receipts: current.receipts.map((receipt) => ({
           ...receipt,
           paidBy: receipt.paidBy === name ? fallbackPayer : receipt.paidBy,
@@ -463,6 +467,39 @@ export default function ReceiptSplitApp() {
           members: hasMember ? group.members.filter((member) => member !== person) : [...group.members, person],
         };
       }),
+    }));
+  };
+
+  const addSettlementPayment = () => {
+    const names = settlementActorNames.length ? settlementActorNames : project.participants;
+    setProject((current) => ({
+      ...current,
+      settlementPayments: [
+        ...(current.settlementPayments || []),
+        {
+          id: crypto.randomUUID(),
+          from: names[0] || "",
+          to: names.find((name) => name !== names[0]) || "",
+          amount: "",
+          note: "",
+        },
+      ],
+    }));
+  };
+
+  const updateSettlementPayment = (paymentId, patch) => {
+    setProject((current) => ({
+      ...current,
+      settlementPayments: (current.settlementPayments || []).map((payment) =>
+        payment.id === paymentId ? { ...payment, ...patch } : payment,
+      ),
+    }));
+  };
+
+  const removeSettlementPayment = (paymentId) => {
+    setProject((current) => ({
+      ...current,
+      settlementPayments: (current.settlementPayments || []).filter((payment) => payment.id !== paymentId),
     }));
   };
 
@@ -584,14 +621,34 @@ export default function ReceiptSplitApp() {
   const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
 
   const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
+  const settlementActorNames = (() => {
+    if (settlementMode !== "groups") return project.participants;
+
+    const groupedMembers = new Set(activeSettlementGroups.flatMap((group) => group.members));
+    return [
+      ...activeSettlementGroups.map((group) => group.name),
+      ...project.participants.filter((person) => !groupedMembers.has(person)),
+    ];
+  })();
   const displayedSettlements =
     settlementMode === "groups"
       ? groupSettlementEntries(projectCalculations.settlements, activeSettlementGroups)
       : projectCalculations.settlements;
-  const convertedSettlements = displayedSettlements.map((settlement) => ({
-    ...settlement,
-    convertedAmount: settlement.amount * Number(project.exchangeRate || 1),
+  const settlementExchangeRate = Number(project.exchangeRate || 1) || 1;
+  const convertedRawSettlements = displayedSettlements.map((settlement) => ({
+    from: settlement.from,
+    to: settlement.to,
+    amount: settlement.amount * settlementExchangeRate,
   }));
+  const activeSettlementPayments = (project.settlementPayments || []).filter(
+    (payment) => settlementActorNames.includes(payment.from) && settlementActorNames.includes(payment.to),
+  );
+  const convertedSettlements = applyRecordedSettlementPayments(convertedRawSettlements, activeSettlementPayments).map((settlement) => ({
+    ...settlement,
+    convertedAmount: settlement.amount,
+    amount: settlement.amount / settlementExchangeRate,
+  }));
+  const recordedPaymentTotal = activeSettlementPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const activePaymentTotal = (activeReceipt.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const activePaymentDifference = activePaymentTotal - activeCalculations.total;
   const projectNetTotal = project.participants.reduce((sum, person) => sum + (projectCalculations.netByPerson[person] || 0), 0);
@@ -1716,6 +1773,80 @@ export default function ReceiptSplitApp() {
                       ? "owed and paid totals match"
                       : `${money(Math.abs(projectNetTotal), activeReceipt.baseCurrency)} off balance`}
                   </p>
+                  <div className="rounded-2xl bg-slate-50 p-4">
+                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <h3 className="font-semibold">Payments already sent</h3>
+                        <p className="text-sm text-slate-500">
+                          Recorded payments subtract from the final settlement total.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={addSettlementPayment}
+                        className="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+                      >
+                        Add payment
+                      </button>
+                    </div>
+                    {(project.settlementPayments || []).length === 0 ? (
+                      <div className="rounded-xl bg-white p-3 text-sm text-slate-500">
+                        No settlement payments recorded yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {(project.settlementPayments || []).map((payment) => (
+                          <div key={payment.id} className="grid gap-2 rounded-xl bg-white p-3 md:grid-cols-[1fr_1fr_8rem_1fr_auto]">
+                            <select
+                              className="rounded-xl border px-3 py-2 text-sm"
+                              value={payment.from}
+                              onChange={(event) => updateSettlementPayment(payment.id, { from: event.target.value })}
+                            >
+                              {settlementActorNames.map((name) => (
+                                <option key={name}>{name}</option>
+                              ))}
+                            </select>
+                            <select
+                              className="rounded-xl border px-3 py-2 text-sm"
+                              value={payment.to}
+                              onChange={(event) => updateSettlementPayment(payment.id, { to: event.target.value })}
+                            >
+                              {settlementActorNames.map((name) => (
+                                <option key={name}>{name}</option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              className="rounded-xl border px-3 py-2 text-sm"
+                              value={payment.amount}
+                              onChange={(event) => updateSettlementPayment(payment.id, { amount: event.target.value })}
+                              placeholder={project.settlementCurrency}
+                            />
+                            <input
+                              className="rounded-xl border px-3 py-2 text-sm"
+                              value={payment.note || ""}
+                              onChange={(event) => updateSettlementPayment(payment.id, { note: event.target.value })}
+                              placeholder="Meal, ride, Venmo, etc."
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeSettlementPayment(payment.id)}
+                              className="rounded-xl px-2 py-1 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {recordedPaymentTotal > 0 && (
+                      <p className="mt-3 text-sm font-medium text-slate-700">
+                        Recorded: {money(recordedPaymentTotal, project.settlementCurrency)}
+                      </p>
+                    )}
+                  </div>
                   {convertedSettlements.length === 0 ? (
                     <div className="rounded-2xl bg-green-50 p-4 text-green-700">Everyone is settled.</div>
                   ) : (
@@ -1725,6 +1856,7 @@ export default function ReceiptSplitApp() {
                           {settlement.from} pays {settlement.to}
                         </p>
                         <p className="text-2xl font-bold">{money(settlement.convertedAmount, project.settlementCurrency)}</p>
+                        {recordedPaymentTotal > 0 && <p className="text-sm text-emerald-700">Remaining after recorded payments</p>}
                         <p className="text-sm text-slate-500">Original: {money(settlement.amount, activeReceipt.baseCurrency)}</p>
                       </div>
                     ))

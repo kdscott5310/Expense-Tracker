@@ -129,6 +129,7 @@ export async function loadProjectFromSupabase(id) {
     settlementCurrency: project.settlement_currency || "USD",
     exchangeRate: project.exchange_rate || 1,
     settlementGroups: Array.isArray(project.settlement_groups) ? project.settlement_groups : undefined,
+    settlementPayments: Array.isArray(project.settlement_payments) ? project.settlement_payments : [],
     participants: members.map((member) => member.name),
     receipts: receipts.map((receipt) => ({
       id: receipt.id,
@@ -176,6 +177,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     settlement_currency: project.settlementCurrency,
     exchange_rate: Number(project.exchangeRate || 1),
     settlement_groups: project.settlementGroups || [],
+    settlement_payments: project.settlementPayments || [],
     last_synced_at: syncTimestamp,
   };
 
@@ -192,6 +194,7 @@ export async function saveProjectToSupabase(project, options = {}) {
 
   if (projectError && isMissingColumnError(projectError)) {
     delete projectRow.settlement_groups;
+    delete projectRow.settlement_payments;
     const retry = await supabase.from("projects").upsert(projectRow);
     projectError = retry.error;
   }
@@ -286,6 +289,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     tripCode,
     serverSyncedAt: projectRow.last_synced_at || project.serverSyncedAt || "",
     settlementGroups: project.settlementGroups || [],
+    settlementPayments: project.settlementPayments || [],
     receipts: receiptsWithIds,
   };
 }
