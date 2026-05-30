@@ -493,6 +493,7 @@ export default function ReceiptSplitApp() {
       ...current,
       settlementGroups: (current.settlementGroups || []).map((group) => (group.id === groupId ? { ...group, ...patch } : group)),
     }));
+    setSettlementMode("groups");
   };
 
   const removeSettlementGroup = (groupId) => {
@@ -500,6 +501,7 @@ export default function ReceiptSplitApp() {
       ...current,
       settlementGroups: (current.settlementGroups || []).filter((group) => group.id !== groupId),
     }));
+    setSettlementMode("groups");
   };
 
   const toggleSettlementGroupMember = (groupId, person) => {
@@ -514,6 +516,7 @@ export default function ReceiptSplitApp() {
         };
       }),
     }));
+    setSettlementMode("groups");
   };
 
   const addSettlementPayment = () => {
@@ -671,8 +674,9 @@ export default function ReceiptSplitApp() {
   );
 
   const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
+  const effectiveSettlementMode = settlementMode === "groups" && activeSettlementGroups.length > 0 ? "groups" : "individual";
   const displayedSettlements =
-    settlementMode === "groups"
+    effectiveSettlementMode === "groups"
       ? groupSettlementEntries(projectCalculations.settlements, activeSettlementGroups)
       : projectCalculations.settlements;
   const settlementExchangeRate = Number(project.exchangeRate || 1) || 1;
@@ -685,8 +689,8 @@ export default function ReceiptSplitApp() {
     .filter((payment) => project.participants.includes(payment.from) && project.participants.includes(payment.to))
     .map((payment) => ({
       ...payment,
-      from: settlementMode === "groups" ? mapSettlementParty(payment.from, activeSettlementGroups) : payment.from,
-      to: settlementMode === "groups" ? mapSettlementParty(payment.to, activeSettlementGroups) : payment.to,
+      from: effectiveSettlementMode === "groups" ? mapSettlementParty(payment.from, activeSettlementGroups) : payment.from,
+      to: effectiveSettlementMode === "groups" ? mapSettlementParty(payment.to, activeSettlementGroups) : payment.to,
     }));
   const convertedSettlements = applyRecordedSettlementPayments(convertedRawSettlements, activeSettlementPayments).map((settlement) => ({
     ...settlement,
@@ -1869,8 +1873,8 @@ export default function ReceiptSplitApp() {
                     <div>
                       <h2 className="text-xl font-semibold">Project settlement</h2>
                       <p className="text-sm text-slate-500">
-                        {settlementMode === "groups"
-                          ? "Couples mode nets household balances first, then shows the simplest final payments."
+                        {effectiveSettlementMode === "groups"
+                          ? "Grouped mode nets selected groups first, then shows the simplest final payments."
                           : "Individual mode shows exact person-to-person reimbursements for each shared expense."}
                       </p>
                     </div>
@@ -1882,7 +1886,7 @@ export default function ReceiptSplitApp() {
                           settlementMode === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
                         }`}
                       >
-                        Couples
+                        Groups
                       </button>
                       <button
                         type="button"
@@ -1895,7 +1899,12 @@ export default function ReceiptSplitApp() {
                       </button>
                     </div>
                   </div>
-                  {settlementMode === "groups" && activeSettlementGroups.length > 0 && (
+                  {settlementMode === "groups" && activeSettlementGroups.length === 0 && (
+                    <div className="rounded-2xl bg-amber-50 p-3 text-sm text-amber-800">
+                      Add at least two people to a settlement group to use grouped settlement.
+                    </div>
+                  )}
+                  {effectiveSettlementMode === "groups" && (
                     <div className="flex flex-wrap gap-2">
                       {activeSettlementGroups.map((group) => (
                         <span key={group.id} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
