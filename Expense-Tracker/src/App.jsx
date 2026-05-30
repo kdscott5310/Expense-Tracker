@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { calculateReceiptSplit, currencySymbols, money, simplifyDebts } from "./lib/calculations";
+import { calculateReceiptSplit, currencySymbols, distributeDebtsProportionally, money } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
 import {
   clearProjectIdInUrl,
@@ -137,7 +137,7 @@ function calculateProjectSplit(project) {
     owedByPerson,
     paidByPerson,
     netByPerson,
-    settlements: simplifyDebts(netByPerson),
+    settlements: distributeDebtsProportionally(netByPerson),
     receiptSummaries,
   };
 }
@@ -496,6 +496,7 @@ export default function ReceiptSplitApp() {
   }));
   const activePaymentTotal = (activeReceipt.payments || []).reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
   const activePaymentDifference = activePaymentTotal - activeCalculations.total;
+  const projectNetTotal = project.participants.reduce((sum, person) => sum + (projectCalculations.netByPerson[person] || 0), 0);
 
   const applyParsedReceipt = (parsedReceipt, sourceLabel) => {
     const parsedItems = parsedReceipt.items.map((item) => ({
@@ -1304,6 +1305,11 @@ export default function ReceiptSplitApp() {
                         Entered payments: {money(activePaymentTotal, activeReceipt.baseCurrency)}. Expense total:{" "}
                         {money(activeCalculations.total, activeReceipt.baseCurrency)}.
                       </p>
+                      {Math.abs(activePaymentDifference) >= 0.01 ? (
+                        <p className="text-xs text-slate-500">
+                          Settlement credits are scaled to the expense total so the overall owed/paid math stays balanced.
+                        </p>
+                      ) : null}
                     </div>
                   ) : null}
                 </div>
@@ -1499,6 +1505,15 @@ export default function ReceiptSplitApp() {
               <div className="rounded-3xl bg-white shadow-sm">
                 <div className="space-y-4 p-5">
                   <h2 className="text-xl font-semibold">Project settlement</h2>
+                  <p className="text-sm text-slate-500">
+                    Each person who owes money pays it back across everyone who is net-positive from paying trip expenses.
+                  </p>
+                  <p className={`text-sm ${Math.abs(projectNetTotal) < 0.01 ? "text-emerald-700" : "text-amber-700"}`}>
+                    Balance check:{" "}
+                    {Math.abs(projectNetTotal) < 0.01
+                      ? "owed and paid totals match"
+                      : `${money(Math.abs(projectNetTotal), activeReceipt.baseCurrency)} off balance`}
+                  </p>
                   {convertedSettlements.length === 0 ? (
                     <div className="rounded-2xl bg-green-50 p-4 text-green-700">Everyone is settled.</div>
                   ) : (

@@ -42,6 +42,28 @@ export function simplifyDebts(netByPerson) {
   return settlements;
 }
 
+export function distributeDebtsProportionally(netByPerson) {
+  const debtors = Object.entries(netByPerson)
+    .filter(([, amount]) => amount < -0.01)
+    .map(([name, amount]) => ({ name, amount: -amount }));
+  const creditors = Object.entries(netByPerson)
+    .filter(([, amount]) => amount > 0.01)
+    .map(([name, amount]) => ({ name, amount }));
+  const totalCredit = creditors.reduce((sum, creditor) => sum + creditor.amount, 0);
+
+  if (!totalCredit) return [];
+
+  return debtors.flatMap((debtor) =>
+    creditors
+      .map((creditor) => ({
+        from: debtor.name,
+        to: creditor.name,
+        amount: (debtor.amount * creditor.amount) / totalCredit,
+      }))
+      .filter((settlement) => settlement.amount > 0.01),
+  );
+}
+
 export function calculateReceiptSplit({ items, participants, paidBy, taxTip, payments = [] }) {
   const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const multiplier = 1 + Number(taxTip || 0) / 100;
@@ -61,10 +83,12 @@ export function calculateReceiptSplit({ items, participants, paidBy, taxTip, pay
     .filter((payment) => payment.person && participants.includes(payment.person))
     .map((payment) => ({ ...payment, amount: Number(payment.amount || 0) }))
     .filter((payment) => payment.amount > 0);
+  const enteredPaymentTotal = validPayments.reduce((sum, payment) => sum + payment.amount, 0);
 
   if (validPayments.length) {
+    const paymentScale = enteredPaymentTotal ? total / enteredPaymentTotal : 1;
     validPayments.forEach((payment) => {
-      paidByPerson[payment.person] = (paidByPerson[payment.person] || 0) + payment.amount;
+      paidByPerson[payment.person] = (paidByPerson[payment.person] || 0) + payment.amount * paymentScale;
     });
   } else if (paidBy) {
     paidByPerson[paidBy] = total;
@@ -77,6 +101,7 @@ export function calculateReceiptSplit({ items, participants, paidBy, taxTip, pay
   return {
     subtotal,
     total,
+    enteredPaymentTotal,
     owedByPerson,
     paidByPerson,
     netByPerson,
