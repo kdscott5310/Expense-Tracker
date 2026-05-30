@@ -152,6 +152,11 @@ export function groupSettlementEntries(settlements, groups = []) {
   return groupedSettlements.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 }
 
+export function mapSettlementParty(name, groups = []) {
+  const group = groups.find((settlementGroup) => settlementGroup.members.includes(name));
+  return group?.name || name;
+}
+
 export function applyRecordedSettlementPayments(settlements, payments = []) {
   const directedDebts = new Map();
 

@@ -5,6 +5,7 @@ import {
   calculateReceiptSplit,
   currencySymbols,
   groupSettlementEntries,
+  mapSettlementParty,
   money,
 } from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
@@ -471,15 +472,14 @@ export default function ReceiptSplitApp() {
   };
 
   const addSettlementPayment = () => {
-    const names = settlementActorNames.length ? settlementActorNames : project.participants;
     setProject((current) => ({
       ...current,
       settlementPayments: [
         ...(current.settlementPayments || []),
         {
           id: crypto.randomUUID(),
-          from: names[0] || "",
-          to: names.find((name) => name !== names[0]) || "",
+          from: current.participants[0] || "",
+          to: current.participants.find((name) => name !== current.participants[0]) || "",
           amount: "",
           note: "",
         },
@@ -621,15 +621,6 @@ export default function ReceiptSplitApp() {
   const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
 
   const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
-  const settlementActorNames = (() => {
-    if (settlementMode !== "groups") return project.participants;
-
-    const groupedMembers = new Set(activeSettlementGroups.flatMap((group) => group.members));
-    return [
-      ...activeSettlementGroups.map((group) => group.name),
-      ...project.participants.filter((person) => !groupedMembers.has(person)),
-    ];
-  })();
   const displayedSettlements =
     settlementMode === "groups"
       ? groupSettlementEntries(projectCalculations.settlements, activeSettlementGroups)
@@ -640,9 +631,13 @@ export default function ReceiptSplitApp() {
     to: settlement.to,
     amount: settlement.amount * settlementExchangeRate,
   }));
-  const activeSettlementPayments = (project.settlementPayments || []).filter(
-    (payment) => settlementActorNames.includes(payment.from) && settlementActorNames.includes(payment.to),
-  );
+  const activeSettlementPayments = (project.settlementPayments || [])
+    .filter((payment) => project.participants.includes(payment.from) && project.participants.includes(payment.to))
+    .map((payment) => ({
+      ...payment,
+      from: settlementMode === "groups" ? mapSettlementParty(payment.from, activeSettlementGroups) : payment.from,
+      to: settlementMode === "groups" ? mapSettlementParty(payment.to, activeSettlementGroups) : payment.to,
+    }));
   const convertedSettlements = applyRecordedSettlementPayments(convertedRawSettlements, activeSettlementPayments).map((settlement) => ({
     ...settlement,
     convertedAmount: settlement.amount,
@@ -1802,7 +1797,7 @@ export default function ReceiptSplitApp() {
                               value={payment.from}
                               onChange={(event) => updateSettlementPayment(payment.id, { from: event.target.value })}
                             >
-                              {settlementActorNames.map((name) => (
+                              {project.participants.map((name) => (
                                 <option key={name}>{name}</option>
                               ))}
                             </select>
@@ -1811,7 +1806,7 @@ export default function ReceiptSplitApp() {
                               value={payment.to}
                               onChange={(event) => updateSettlementPayment(payment.id, { to: event.target.value })}
                             >
-                              {settlementActorNames.map((name) => (
+                              {project.participants.map((name) => (
                                 <option key={name}>{name}</option>
                               ))}
                             </select>

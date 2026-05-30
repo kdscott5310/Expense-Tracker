@@ -186,15 +186,29 @@ export async function saveProjectToSupabase(project, options = {}) {
 
   let { error: projectError } = await supabase.from("projects").upsert(projectRow);
 
-  if (projectError && String(projectError.message || "").includes("last_synced_at")) {
-    delete projectRow.last_synced_at;
-    const retry = await supabase.from("projects").upsert(projectRow);
-    projectError = retry.error;
-  }
+  for (let attempt = 0; projectError && attempt < 4; attempt += 1) {
+    const message = String(projectError.message || "");
+    let removedMissingColumn = false;
 
-  if (projectError && isMissingColumnError(projectError)) {
-    delete projectRow.settlement_groups;
-    delete projectRow.settlement_payments;
+    if (message.includes("last_synced_at") && "last_synced_at" in projectRow) {
+      delete projectRow.last_synced_at;
+      removedMissingColumn = true;
+    }
+
+    if (isMissingColumnError(projectError)) {
+      if (message.includes("settlement_groups") && "settlement_groups" in projectRow) {
+        delete projectRow.settlement_groups;
+        removedMissingColumn = true;
+      }
+
+      if (message.includes("settlement_payments") && "settlement_payments" in projectRow) {
+        delete projectRow.settlement_payments;
+        removedMissingColumn = true;
+      }
+    }
+
+    if (!removedMissingColumn) break;
+
     const retry = await supabase.from("projects").upsert(projectRow);
     projectError = retry.error;
   }
