@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { calculatePayerReimbursements, calculateReceiptSplit, currencySymbols, money } from "./lib/calculations";
+import {
+  calculatePayerReimbursements,
+  calculateReceiptSplit,
+  currencySymbols,
+  groupSettlementEntries,
+  money,
+} from "./lib/calculations";
 import { extractReceiptText } from "./lib/ocr";
 import {
   clearProjectIdInUrl,
@@ -18,6 +24,10 @@ import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
 const storageKey = "receipt-split-project-v1";
 const defaultParticipants = ["Kevin", "Alex", "Jamie", "Taylor"];
+const defaultSettlementGroups = [
+  { id: "kevin-simone", name: "Kevin + Simone", members: ["Kevin", "Simone"] },
+  { id: "tyler-lindsay", name: "Tyler + Lindsay", members: ["Tyler", "Lindsay"] },
+];
 
 const sampleItems = [
   { id: crypto.randomUUID(), name: "Sangria pitcher", category: "Shared drinks", amount: 28, sharedBy: ["Kevin", "Alex", "Jamie", "Taylor"] },
@@ -101,6 +111,15 @@ function formatServerTime(value) {
   });
 }
 
+function getActiveSettlementGroups(project) {
+  return defaultSettlementGroups
+    .map((group) => ({
+      ...group,
+      members: group.members.filter((member) => project.participants.includes(member)),
+    }))
+    .filter((group) => group.members.length > 1);
+}
+
 function calculateProjectSplit(project) {
   const owedByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
   const paidByPerson = Object.fromEntries(project.participants.map((person) => [person, 0]));
@@ -165,6 +184,7 @@ export default function ReceiptSplitApp() {
   const [tripListStatus, setTripListStatus] = useState("");
   const [accessTripCode, setAccessTripCode] = useState(project.tripCode || "");
   const [tripAccessStatus, setTripAccessStatus] = useState("");
+  const [settlementMode, setSettlementMode] = useState("groups");
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
   const serverSyncLabel = formatServerTime(project.serverSyncedAt);
@@ -490,7 +510,12 @@ export default function ReceiptSplitApp() {
 
   const projectCalculations = useMemo(() => calculateProjectSplit(project), [project]);
 
-  const convertedSettlements = projectCalculations.settlements.map((settlement) => ({
+  const activeSettlementGroups = useMemo(() => getActiveSettlementGroups(project), [project]);
+  const displayedSettlements =
+    settlementMode === "groups"
+      ? groupSettlementEntries(projectCalculations.settlements, activeSettlementGroups)
+      : projectCalculations.settlements;
+  const convertedSettlements = displayedSettlements.map((settlement) => ({
     ...settlement,
     convertedAmount: settlement.amount * Number(project.exchangeRate || 1),
   }));
@@ -1504,10 +1529,45 @@ export default function ReceiptSplitApp() {
 
               <div className="rounded-3xl bg-white shadow-sm">
                 <div className="space-y-4 p-5">
-                  <h2 className="text-xl font-semibold">Project settlement</h2>
-                  <p className="text-sm text-slate-500">
-                    Each person pays back the people who paid for the specific meals, rides, and expenses they shared.
-                  </p>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 className="text-xl font-semibold">Project settlement</h2>
+                      <p className="text-sm text-slate-500">
+                        {settlementMode === "groups"
+                          ? "Couples mode nets household balances first, then shows the simplest final payments."
+                          : "Individual mode shows exact person-to-person reimbursements for each shared expense."}
+                      </p>
+                    </div>
+                    <div className="inline-flex rounded-2xl bg-slate-100 p-1 text-sm font-medium">
+                      <button
+                        type="button"
+                        onClick={() => setSettlementMode("groups")}
+                        className={`rounded-xl px-3 py-2 ${
+                          settlementMode === "groups" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                        }`}
+                      >
+                        Couples
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSettlementMode("individual")}
+                        className={`rounded-xl px-3 py-2 ${
+                          settlementMode === "individual" ? "bg-white text-slate-900 shadow-sm" : "text-slate-600"
+                        }`}
+                      >
+                        Individuals
+                      </button>
+                    </div>
+                  </div>
+                  {settlementMode === "groups" && activeSettlementGroups.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {activeSettlementGroups.map((group) => (
+                        <span key={group.id} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700">
+                          {group.name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                   <p className={`text-sm ${Math.abs(projectNetTotal) < 0.01 ? "text-emerald-700" : "text-amber-700"}`}>
                     Balance check:{" "}
                     {Math.abs(projectNetTotal) < 0.01

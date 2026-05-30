@@ -111,6 +111,47 @@ export function calculatePayerReimbursements(receiptSummaries, participants) {
   return settlements.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
 }
 
+export function groupSettlementEntries(settlements, groups = []) {
+  if (!groups.length) return settlements;
+
+  const personToGroup = new Map();
+  groups.forEach((group) => {
+    group.members.forEach((member) => {
+      personToGroup.set(member, group.name);
+    });
+  });
+
+  const groupedDebts = new Map();
+
+  settlements.forEach((settlement) => {
+    const from = personToGroup.get(settlement.from) || settlement.from;
+    const to = personToGroup.get(settlement.to) || settlement.to;
+    if (from === to) return;
+
+    const key = `${from}\u0000${to}`;
+    groupedDebts.set(key, (groupedDebts.get(key) || 0) + settlement.amount);
+  });
+
+  const groupedSettlements = [];
+  const handledPairs = new Set();
+
+  groupedDebts.forEach((amount, key) => {
+    const [from, to] = key.split("\u0000");
+    const pairKey = [from, to].sort().join("\u0000");
+    if (handledPairs.has(pairKey)) return;
+
+    const reverseAmount = groupedDebts.get(`${to}\u0000${from}`) || 0;
+    const netAmount = amount - reverseAmount;
+
+    if (netAmount > 0.01) groupedSettlements.push({ from, to, amount: netAmount });
+    if (netAmount < -0.01) groupedSettlements.push({ from: to, to: from, amount: Math.abs(netAmount) });
+
+    handledPairs.add(pairKey);
+  });
+
+  return groupedSettlements.sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+}
+
 export function calculateReceiptSplit({ items, participants, paidBy, taxTip, payments = [] }) {
   const subtotal = items.reduce((sum, item) => sum + Number(item.amount || 0), 0);
   const multiplier = 1 + Number(taxTip || 0) / 100;
