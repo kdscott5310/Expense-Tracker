@@ -979,7 +979,7 @@ export default function ReceiptSplitApp() {
         }
       }
 
-      const isSavingAsNewTripCode = isSharedProject && cleanCode && currentProjectCode && cleanCode !== currentProjectCode;
+      const isSavingAsNewTripCode = cleanCode && currentProjectCode && cleanCode !== currentProjectCode;
       const projectToSave = isSavingAsNewTripCode
         ? cloneProjectForTripCode(project, cleanCode)
         : cleanCode
