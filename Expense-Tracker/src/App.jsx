@@ -2093,7 +2093,7 @@ export default function ReceiptSplitApp() {
                       <div>
                         <h3 className="font-semibold">Payments already sent</h3>
                         <p className="text-sm text-slate-500">
-                          Recorded payments subtract from the final settlement total.
+                          Enter money that was already sent: paid by to received by. This subtracts from what is still owed.
                         </p>
                       </div>
                       <button
@@ -2111,47 +2111,66 @@ export default function ReceiptSplitApp() {
                     ) : (
                       <div className="space-y-2">
                         {(project.settlementPayments || []).map((payment) => (
-                          <div key={payment.id} className="grid gap-2 rounded-xl bg-white p-3 md:grid-cols-[1fr_1fr_8rem_1fr_auto]">
-                            <select
-                              className="rounded-xl border px-3 py-2 text-sm"
-                              value={payment.from}
-                              onChange={(event) => updateSettlementPayment(payment.id, { from: event.target.value })}
-                            >
-                              {project.participants.map((name) => (
-                                <option key={name}>{name}</option>
-                              ))}
-                            </select>
-                            <select
-                              className="rounded-xl border px-3 py-2 text-sm"
-                              value={payment.to}
-                              onChange={(event) => updateSettlementPayment(payment.id, { to: event.target.value })}
-                            >
-                              {project.participants.map((name) => (
-                                <option key={name}>{name}</option>
-                              ))}
-                            </select>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              className="rounded-xl border px-3 py-2 text-sm"
-                              value={payment.amount}
-                              onChange={(event) => updateSettlementPayment(payment.id, { amount: event.target.value })}
-                              placeholder={project.settlementCurrency}
-                            />
-                            <input
-                              className="rounded-xl border px-3 py-2 text-sm"
-                              value={payment.note || ""}
-                              onChange={(event) => updateSettlementPayment(payment.id, { note: event.target.value })}
-                              placeholder="Meal, ride, Venmo, etc."
-                            />
-                            <button
-                              type="button"
-                              onClick={() => removeSettlementPayment(payment.id)}
-                              className="rounded-xl px-2 py-1 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
-                            >
-                              Remove
-                            </button>
+                          <div key={payment.id} className="rounded-xl bg-white p-3">
+                            <div className="grid gap-2 md:grid-cols-[1fr_1fr_8rem_1fr_auto]">
+                              <label className="text-xs font-medium text-slate-500">
+                                Paid by
+                                <select
+                                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm text-slate-900"
+                                  value={payment.from}
+                                  onChange={(event) => updateSettlementPayment(payment.id, { from: event.target.value })}
+                                >
+                                  {project.participants.map((name) => (
+                                    <option key={name}>{name}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="text-xs font-medium text-slate-500">
+                                Received by
+                                <select
+                                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm text-slate-900"
+                                  value={payment.to}
+                                  onChange={(event) => updateSettlementPayment(payment.id, { to: event.target.value })}
+                                >
+                                  {project.participants.map((name) => (
+                                    <option key={name}>{name}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="text-xs font-medium text-slate-500">
+                                Amount
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="0.01"
+                                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm text-slate-900"
+                                  value={payment.amount}
+                                  onChange={(event) => updateSettlementPayment(payment.id, { amount: event.target.value })}
+                                  placeholder={project.settlementCurrency}
+                                />
+                              </label>
+                              <label className="text-xs font-medium text-slate-500">
+                                Description
+                                <input
+                                  className="mt-1 w-full rounded-xl border px-3 py-2 text-sm text-slate-900"
+                                  value={payment.note || ""}
+                                  onChange={(event) => updateSettlementPayment(payment.id, { note: event.target.value })}
+                                  placeholder="Meal, ride, Venmo, etc."
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() => removeSettlementPayment(payment.id)}
+                                className="self-end rounded-xl px-2 py-2 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            {Number(payment.amount || 0) > 0 && (
+                              <p className="mt-2 text-xs font-medium text-emerald-700">
+                                {payment.from} already paid {payment.to} {money(payment.amount, project.settlementCurrency)}.
+                              </p>
+                            )}
                           </div>
                         ))}
                       </div>
@@ -2176,6 +2195,9 @@ export default function ReceiptSplitApp() {
                       </div>
                     ))
                   )}
+                  <p className="text-xs text-slate-500">
+                    If someone already paid, record it in the same direction as the settlement: the person who paid first, the person who received second.
+                  </p>
                 </div>
               </div>
             </div>
