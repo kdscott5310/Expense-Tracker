@@ -881,7 +881,7 @@ export default function ReceiptSplitApp() {
 
       const loadedProject = await loadProjectFromSupabase(projectId);
       applyLoadedProject(loadedProject, `Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
-      setTripAccessStatus(`Loaded ${cleanCode}. Latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
+      setTripAccessStatus(`Loaded trip code ${cleanCode}.`);
     } catch (error) {
       setTripAccessStatus(`Trip code load failed: ${error.message}`);
     }
@@ -966,6 +966,11 @@ export default function ReceiptSplitApp() {
         `Saved to server${normalizedProject.tripCode ? ` as ${normalizedProject.tripCode}` : ""}: ${formatServerTime(
           normalizedProject.serverSyncedAt,
         )}.`,
+      );
+      setTripAccessStatus(
+        normalizedProject.tripCode
+          ? `Saved trip code ${normalizedProject.tripCode} at ${formatServerTime(normalizedProject.serverSyncedAt)}.`
+          : `Saved project at ${formatServerTime(normalizedProject.serverSyncedAt)}.`,
       );
       setSaveStatus(
         normalizedProject.tripCode
