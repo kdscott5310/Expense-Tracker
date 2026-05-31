@@ -130,6 +130,7 @@ export async function loadProjectFromSupabase(id) {
     exchangeRate: project.exchange_rate || 1,
     settlementGroups: Array.isArray(project.settlement_groups) ? project.settlement_groups : undefined,
     settlementPayments: Array.isArray(project.settlement_payments) ? project.settlement_payments : [],
+    discrepancies: Array.isArray(project.discrepancies) ? project.discrepancies : [],
     participants: members.map((member) => member.name),
     receipts: receipts.map((receipt) => ({
       id: receipt.id,
@@ -178,6 +179,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     exchange_rate: Number(project.exchangeRate || 1),
     settlement_groups: project.settlementGroups || [],
     settlement_payments: project.settlementPayments || [],
+    discrepancies: project.discrepancies || [],
     last_synced_at: syncTimestamp,
   };
 
@@ -203,6 +205,11 @@ export async function saveProjectToSupabase(project, options = {}) {
 
       if (message.includes("settlement_payments") && "settlement_payments" in projectRow) {
         delete projectRow.settlement_payments;
+        removedMissingColumn = true;
+      }
+
+      if (message.includes("discrepancies") && "discrepancies" in projectRow) {
+        delete projectRow.discrepancies;
         removedMissingColumn = true;
       }
     }
@@ -304,6 +311,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     serverSyncedAt: projectRow.last_synced_at || project.serverSyncedAt || "",
     settlementGroups: project.settlementGroups || [],
     settlementPayments: project.settlementPayments || [],
+    discrepancies: project.discrepancies || [],
     receipts: receiptsWithIds,
   };
 }

@@ -77,6 +77,7 @@ function createInitialProject() {
     participants: defaultParticipants,
     settlementGroups: [],
     settlementPayments: [],
+    discrepancies: [],
     settlementCurrency: "USD",
     exchangeRate: 1.08,
     receipts: [createReceipt()],
@@ -106,6 +107,7 @@ function normalizeProject(project) {
     ...project,
     settlementGroups: normalizeSettlementGroups(project),
     settlementPayments: Array.isArray(project.settlementPayments) ? project.settlementPayments : [],
+    discrepancies: Array.isArray(project.discrepancies) ? project.discrepancies : [],
   };
 }
 
@@ -246,13 +248,14 @@ function buildParticipantAudit(project, projectCalculations, person) {
 export default function ReceiptSplitApp() {
   const fileInputRef = useRef(null);
   const applyingRemoteProjectRef = useRef(false);
-  const autoSyncTimerRef = useRef(null);
   const savingProjectRef = useRef(false);
   const urlProjectId = getProjectIdFromUrl();
   const [project, setProject] = useState(loadInitialProject);
+  const [lastSavedProjectJson, setLastSavedProjectJson] = useState(() => JSON.stringify(project));
   const [activeReceiptId, setActiveReceiptId] = useState(project.receipts[0]?.id);
   const [newPerson, setNewPerson] = useState("");
   const [saveStatus, setSaveStatus] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
   const [shareStatus, setShareStatus] = useState(urlProjectId ? "Loading shared project..." : "");
   const [isSharedProject, setIsSharedProject] = useState(Boolean(urlProjectId));
   const [sharedProjectLoaded, setSharedProjectLoaded] = useState(!urlProjectId);
@@ -269,13 +272,18 @@ export default function ReceiptSplitApp() {
   const [settlementMode, setSettlementMode] = useState("groups");
   const [newSettlementGroupName, setNewSettlementGroupName] = useState("");
   const [auditPerson, setAuditPerson] = useState(project.participants[0] || "");
+  const [reviewerName, setReviewerName] = useState(() => window.localStorage.getItem("receipt-split-reviewer-name") || "");
+  const [newDiscrepancy, setNewDiscrepancy] = useState({ type: "wrong-person", receiptId: "", person: "", note: "" });
 
   const activeReceipt = project.receipts.find((receipt) => receipt.id === activeReceiptId) || project.receipts[0];
   const serverSyncLabel = formatServerTime(project.serverSyncedAt);
+  const projectJson = JSON.stringify(project);
+  const hasUnsavedChanges = projectJson !== lastSavedProjectJson;
 
   const applyLoadedProject = useCallback((loadedProject, status = "Shared project loaded.") => {
     applyingRemoteProjectRef.current = true;
     const normalizedProject = normalizeProject(loadedProject);
+    setLastSavedProjectJson(JSON.stringify(normalizedProject));
     setProject(normalizedProject);
     setActiveReceiptId(loadedProject.receipts[0]?.id);
     setSelectedProjectId(normalizedProject.id);
@@ -289,6 +297,10 @@ export default function ReceiptSplitApp() {
   useEffect(() => {
     window.localStorage.setItem(storageKey, JSON.stringify(project));
   }, [project]);
+
+  useEffect(() => {
+    window.localStorage.setItem("receipt-split-reviewer-name", reviewerName);
+  }, [reviewerName]);
 
   const refreshUserProjects = useCallback(
     async (userId = currentUser?.id) => {
@@ -360,78 +372,10 @@ export default function ReceiptSplitApp() {
   }, [applyLoadedProject]);
 
   useEffect(() => {
-    const id = getProjectIdFromUrl();
-    if (!id || !hasSupabaseConfig || !supabase) return undefined;
-
-    let reloadTimer;
-    const reloadProject = () => {
-      window.clearTimeout(reloadTimer);
-      reloadTimer = window.setTimeout(async () => {
-        try {
-          const loadedProject = await loadProjectFromSupabase(id);
-          const normalizedProject = normalizeProject(loadedProject);
-          applyingRemoteProjectRef.current = true;
-          setProject(normalizedProject);
-          setActiveReceiptId((currentId) =>
-            normalizedProject.receipts.some((receipt) => receipt.id === currentId) ? currentId : normalizedProject.receipts[0]?.id,
-          );
-          setSharedProjectLoaded(true);
-          setShareStatus(`Pulled latest server sync: ${formatServerTime(loadedProject.serverSyncedAt)}.`);
-        } catch (error) {
-          setShareStatus(`Realtime refresh failed: ${error.message}`);
-        }
-      }, 500);
-    };
-
-    const channel = supabase
-      .channel(`project-${id}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "projects", filter: `id=eq.${id}` }, reloadProject)
-      .on("postgres_changes", { event: "*", schema: "public", table: "project_members", filter: `project_id=eq.${id}` }, reloadProject)
-      .on("postgres_changes", { event: "*", schema: "public", table: "receipts", filter: `project_id=eq.${id}` }, reloadProject)
-      .on("postgres_changes", { event: "*", schema: "public", table: "receipt_items" }, reloadProject)
-      .subscribe();
-
-    return () => {
-      window.clearTimeout(reloadTimer);
-      supabase.removeChannel(channel);
-    };
-  }, [isSharedProject, project.id]);
-
-  useEffect(() => {
-    if (!isSharedProject || !sharedProjectLoaded || !hasSupabaseConfig || !supabase) return undefined;
-
     if (applyingRemoteProjectRef.current) {
       applyingRemoteProjectRef.current = false;
-      return undefined;
     }
-
-    window.clearTimeout(autoSyncTimerRef.current);
-    autoSyncTimerRef.current = window.setTimeout(async () => {
-      if (savingProjectRef.current) return;
-
-      savingProjectRef.current = true;
-      setShareStatus("Auto-syncing shared project...");
-
-      try {
-        const savedProject = await saveProjectToSupabase(project, { userId: currentUser?.id });
-        const normalizedProject = normalizeProject(savedProject);
-        applyingRemoteProjectRef.current = true;
-        setProject(normalizedProject);
-        if (normalizedProject.id !== project.id) {
-          setProjectIdInUrl(normalizedProject.id);
-        }
-        setShareStatus(`Auto-synced to server: ${formatServerTime(normalizedProject.serverSyncedAt)}.`);
-      } catch (error) {
-        setShareStatus(`Auto-sync failed: ${error.message}`);
-      } finally {
-        savingProjectRef.current = false;
-      }
-    }, 1200);
-
-    return () => {
-      window.clearTimeout(autoSyncTimerRef.current);
-    };
-  }, [currentUser?.id, isSharedProject, project, sharedProjectLoaded]);
+  }, [project]);
 
   const updateProject = (patch) => {
     setProject((current) => ({ ...current, ...patch }));
@@ -561,6 +505,49 @@ export default function ReceiptSplitApp() {
     setProject((current) => ({
       ...current,
       settlementPayments: (current.settlementPayments || []).filter((payment) => payment.id !== paymentId),
+    }));
+  };
+
+  const addDiscrepancy = () => {
+    const cleanNote = newDiscrepancy.note.trim();
+    if (!cleanNote) {
+      setSaveStatus("Add a note before submitting a discrepancy.");
+      return;
+    }
+
+    setProject((current) => ({
+      ...current,
+      discrepancies: [
+        ...(current.discrepancies || []),
+        {
+          id: crypto.randomUUID(),
+          type: newDiscrepancy.type,
+          receiptId: newDiscrepancy.receiptId || activeReceipt.id,
+          person: newDiscrepancy.person || activeAuditPerson || current.participants[0] || "",
+          note: cleanNote,
+          status: "open",
+          createdBy: reviewerName.trim() || "Reviewer",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+    }));
+    setNewDiscrepancy((current) => ({ ...current, note: "" }));
+    setSaveStatus("Discrepancy added locally. Save changes when ready.");
+  };
+
+  const updateDiscrepancy = (id, patch) => {
+    setProject((current) => ({
+      ...current,
+      discrepancies: (current.discrepancies || []).map((discrepancy) =>
+        discrepancy.id === id ? { ...discrepancy, ...patch } : discrepancy,
+      ),
+    }));
+  };
+
+  const removeDiscrepancy = (id) => {
+    setProject((current) => ({
+      ...current,
+      discrepancies: (current.discrepancies || []).filter((discrepancy) => discrepancy.id !== id),
     }));
   };
 
@@ -865,8 +852,8 @@ export default function ReceiptSplitApp() {
     setSharedProjectLoaded(true);
     setSelectedProjectId("");
     setAccessTripCode(tripCode);
-    setTripAccessStatus(`Started ${tripCode}. Sync to save it for the group.`);
-    setShareStatus("New local trip started. Sync to save it.");
+    setTripAccessStatus(`Started ${tripCode}. Save changes to share it with the group.`);
+    setShareStatus("New local trip started. Save changes to create the shared copy.");
     setSaveStatus("");
   };
 
@@ -887,7 +874,7 @@ export default function ReceiptSplitApp() {
     try {
       const projectId = await findProjectIdByTripCode(cleanCode);
       if (!projectId) {
-        setTripAccessStatus(`No trip found for ${cleanCode}. Start a new trip with that code, then sync it.`);
+        setTripAccessStatus(`No trip found for ${cleanCode}. Start a new trip with that code, then save it.`);
         return;
       }
 
@@ -928,6 +915,7 @@ export default function ReceiptSplitApp() {
   };
 
   const saveProject = async () => {
+    if (savingProjectRef.current) return;
     setSaveStatus("");
 
     if (!hasSupabaseConfig || !supabase) {
@@ -937,12 +925,13 @@ export default function ReceiptSplitApp() {
 
     try {
       savingProjectRef.current = true;
+      setIsSaving(true);
 
       const urlId = getProjectIdFromUrl();
       if ((urlId || isSharedProject) && !sharedProjectLoaded) {
         const idToLoad = urlId || project.id;
         const loadedProject = await loadProjectFromSupabase(idToLoad);
-        applyLoadedProject(loadedProject, "Loaded the server project first. Review it, then sync after edits.");
+        applyLoadedProject(loadedProject, "Loaded the server project first. Review it, then save after edits.");
         setSaveStatus("Loaded the existing shared project instead of saving local defaults.");
         return;
       }
@@ -962,6 +951,7 @@ export default function ReceiptSplitApp() {
       const savedProject = await saveProjectToSupabase(projectToSave, { userId: currentUser?.id });
       const normalizedProject = normalizeProject(savedProject);
       applyingRemoteProjectRef.current = true;
+      setLastSavedProjectJson(JSON.stringify(normalizedProject));
       setProject(normalizedProject);
       setSelectedProjectId(normalizedProject.id);
       setAccessTripCode(normalizedProject.tripCode || "");
@@ -979,6 +969,7 @@ export default function ReceiptSplitApp() {
       setSaveStatus(`Save failed: ${error.message}`);
     } finally {
       savingProjectRef.current = false;
+      setIsSaving(false);
     }
   };
 
@@ -993,7 +984,7 @@ export default function ReceiptSplitApp() {
     try {
       const existingProjectId = await findProjectIdByName(project.name);
       if (!existingProjectId) {
-        setShareStatus(`No Supabase project found named "${project.name}". Sync once to create it.`);
+        setShareStatus(`No Supabase project found named "${project.name}". Save once to create it.`);
         return;
       }
 
@@ -1007,12 +998,28 @@ export default function ReceiptSplitApp() {
 
   const copyShareLink = async () => {
     if (!isSharedProject) {
-      setShareStatus("Sync the project to Supabase first, then copy the shared link.");
+      setShareStatus("Save the project to Supabase first, then copy the shared link.");
       return;
     }
 
     await navigator.clipboard.writeText(window.location.href);
     setShareStatus("Shared project link copied.");
+  };
+
+  const downloadProjectBackup = () => {
+    const safeName = normalizeTripCode(project.tripCode || project.name || "trip-backup").toLowerCase();
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      project,
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `${safeName || "trip"}-backup.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setSaveStatus("Backup downloaded.");
   };
 
   return (
@@ -1052,6 +1059,9 @@ export default function ReceiptSplitApp() {
             <h2 className="text-xl font-semibold">Trip code</h2>
             <p className="text-sm text-slate-500">Use one code for the group so everyone opens the same saved trip.</p>
             <p className="mt-2 text-sm font-medium text-slate-700">Latest server sync: {serverSyncLabel}</p>
+            <p className={`mt-2 text-sm font-semibold ${hasUnsavedChanges ? "text-amber-700" : "text-emerald-700"}`}>
+              {isSaving ? "Saving changes..." : hasUnsavedChanges ? "Unsaved changes" : "Saved locally and synced"}
+            </p>
             {tripAccessStatus ? <p className="mt-2 text-sm text-slate-700">{tripAccessStatus}</p> : null}
           </div>
           <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto_auto] lg:items-end">
@@ -1085,9 +1095,10 @@ export default function ReceiptSplitApp() {
             <button
               type="button"
               onClick={saveProject}
+              disabled={isSaving}
               className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
             >
-              Sync
+              {isSaving ? "Saving..." : "Save changes"}
             </button>
             <button
               type="button"
@@ -1193,7 +1204,7 @@ export default function ReceiptSplitApp() {
           <div>
             <h2 className="text-xl font-semibold">Shared project</h2>
             <p className="text-sm text-slate-500">
-              Sync to Supabase to keep this trip across devices and let others add receipts from the same link.
+              Save to Supabase to keep this trip across devices and let others add receipts from the same link.
             </p>
             <p className="mt-2 text-sm font-medium text-slate-700">Latest server sync: {serverSyncLabel}</p>
             {shareStatus ? <p className="mt-2 text-sm text-slate-700">{shareStatus}</p> : null}
@@ -1207,9 +1218,10 @@ export default function ReceiptSplitApp() {
             <button
               type="button"
               onClick={saveProject}
+              disabled={isSaving}
               className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
             >
-              Sync shared project
+              {isSaving ? "Saving..." : "Save changes"}
             </button>
             <button
               type="button"
@@ -1905,6 +1917,125 @@ export default function ReceiptSplitApp() {
                 </div>
               </div>
 
+              <div className="rounded-3xl bg-white shadow-sm">
+                <div className="space-y-4 p-5">
+                  <div className="flex items-center gap-2">
+                    <SectionIcon>DR</SectionIcon>
+                    <h2 className="text-xl font-semibold">Discrepancies</h2>
+                  </div>
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <label className="text-sm">
+                      Your name
+                      <input
+                        className="mt-1 w-full rounded-2xl border px-3 py-2"
+                        value={reviewerName}
+                        onChange={(event) => setReviewerName(event.target.value)}
+                        placeholder="Who is reviewing?"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      Person affected
+                      <select
+                        className="mt-1 w-full rounded-2xl border px-3 py-2"
+                        value={newDiscrepancy.person || activeAuditPerson}
+                        onChange={(event) => setNewDiscrepancy((current) => ({ ...current, person: event.target.value }))}
+                      >
+                        {project.participants.map((person) => (
+                          <option key={person}>{person}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm">
+                      Issue type
+                      <select
+                        className="mt-1 w-full rounded-2xl border px-3 py-2"
+                        value={newDiscrepancy.type}
+                        onChange={(event) => setNewDiscrepancy((current) => ({ ...current, type: event.target.value }))}
+                      >
+                        <option value="wrong-person">Wrong person on item</option>
+                        <option value="wrong-amount">Wrong amount</option>
+                        <option value="missing-receipt">Missing receipt</option>
+                        <option value="already-paid">Already paid</option>
+                        <option value="other">Other</option>
+                      </select>
+                    </label>
+                    <label className="text-sm">
+                      Receipt
+                      <select
+                        className="mt-1 w-full rounded-2xl border px-3 py-2"
+                        value={newDiscrepancy.receiptId}
+                        onChange={(event) => setNewDiscrepancy((current) => ({ ...current, receiptId: event.target.value }))}
+                      >
+                        <option value="">Current active receipt</option>
+                        {project.receipts.map((receipt) => (
+                          <option key={receipt.id} value={receipt.id}>
+                            {receipt.place}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="text-sm md:col-span-2">
+                      Note
+                      <textarea
+                        className="mt-1 min-h-24 w-full rounded-2xl border px-3 py-2"
+                        value={newDiscrepancy.note}
+                        onChange={(event) => setNewDiscrepancy((current) => ({ ...current, note: event.target.value }))}
+                        placeholder="Example: I did not have the croquettes, or I paid Kevin $40 already."
+                      />
+                    </label>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={addDiscrepancy}
+                    className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                  >
+                    Add discrepancy
+                  </button>
+                  <div className="space-y-2">
+                    {(project.discrepancies || []).length === 0 ? (
+                      <div className="rounded-2xl bg-slate-50 p-4 text-sm text-slate-500">No discrepancies submitted yet.</div>
+                    ) : (
+                      (project.discrepancies || []).map((discrepancy) => {
+                        const linkedReceipt = project.receipts.find((receipt) => receipt.id === discrepancy.receiptId);
+                        return (
+                          <div key={discrepancy.id} className="rounded-2xl border bg-white p-4 text-sm">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                              <div>
+                                <p className="font-semibold">
+                                  {discrepancy.person || "Group"} - {discrepancy.type}
+                                </p>
+                                <p className="text-slate-500">
+                                  {linkedReceipt?.place || "No receipt selected"} by {discrepancy.createdBy || "Reviewer"}
+                                </p>
+                              </div>
+                              <select
+                                className="rounded-xl border px-3 py-2"
+                                value={discrepancy.status}
+                                onChange={(event) => updateDiscrepancy(discrepancy.id, { status: event.target.value })}
+                              >
+                                <option value="open">Open</option>
+                                <option value="resolved">Resolved</option>
+                              </select>
+                            </div>
+                            <p className="mt-3 text-slate-700">{discrepancy.note}</p>
+                            <div className="mt-3 flex items-center justify-between gap-3 text-xs text-slate-500">
+                              <span>{discrepancy.createdAt ? new Date(discrepancy.createdAt).toLocaleString() : "No date"}</span>
+                              <button
+                                type="button"
+                                onClick={() => removeDiscrepancy(discrepancy.id)}
+                                className="rounded-xl px-2 py-1 text-sm text-slate-500 hover:bg-red-50 hover:text-red-600"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+
               <div className="rounded-3xl bg-white shadow-sm lg:col-span-2">
                 <div className="space-y-4 p-5">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2054,17 +2185,30 @@ export default function ReceiptSplitApp() {
                 <div>
                   <h2 className="text-xl font-semibold">Store project</h2>
                   <p className="text-sm text-slate-500">
-                    Auto-saves in this browser. Sync to Supabase to share across devices and collaborators.
+                    Saves in this browser while you work. Use Save changes to update the shared Supabase trip.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={saveProject}
-                  className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
-                >
-                  Sync shared project
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={downloadProjectBackup}
+                    className="rounded-2xl border px-4 py-2 font-medium text-slate-700 hover:bg-slate-100"
+                  >
+                    Download backup
+                  </button>
+                  <button
+                    type="button"
+                    onClick={saveProject}
+                    disabled={isSaving}
+                    className="rounded-2xl bg-slate-900 px-4 py-2 font-medium text-white hover:bg-slate-700"
+                  >
+                    {isSaving ? "Saving..." : "Save changes"}
+                  </button>
+                </div>
               </div>
+              <p className={`mt-3 text-sm font-semibold ${hasUnsavedChanges ? "text-amber-700" : "text-emerald-700"}`}>
+                {hasUnsavedChanges ? "This browser has unsaved changes." : "No unsaved changes."}
+              </p>
               {saveStatus ? <p className="mt-3 text-sm text-slate-600">{saveStatus}</p> : null}
             </div>
           </main>
