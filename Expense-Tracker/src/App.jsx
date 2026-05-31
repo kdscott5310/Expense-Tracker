@@ -897,8 +897,17 @@ export default function ReceiptSplitApp() {
 
     try {
       const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
-      let projectId = cleanCode ? await findProjectIdByTripCode(cleanCode) : "";
-      if (!projectId && isSharedProject) {
+      const currentProjectCode = normalizeTripCode(project.tripCode);
+      if (cleanCode) {
+        setAccessTripCode(cleanCode);
+      }
+
+      let projectId = "";
+      if (isSharedProject && project.id && cleanCode && cleanCode === currentProjectCode) {
+        projectId = project.id;
+      } else if (cleanCode) {
+        projectId = await findProjectIdByTripCode(cleanCode);
+      } else if (isSharedProject) {
         projectId = project.id;
       }
 

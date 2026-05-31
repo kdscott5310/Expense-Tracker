@@ -74,23 +74,26 @@ export async function findProjectIdByTripCode(code) {
   const cleanCode = normalizeTripCode(code);
   if (!cleanCode) return null;
 
-  const query = supabase
+  let { data, error } = await supabase
     .from("projects")
     .select("id, last_synced_at, created_at")
-    .eq("trip_code", cleanCode)
-    .order("last_synced_at", { ascending: false, nullsFirst: false })
-    .limit(1);
-
-  let { data, error } = await query;
+    .eq("trip_code", cleanCode);
 
   if (error && isMissingColumnError(error)) {
-    const retry = await supabase.from("projects").select("id").eq("trip_code", cleanCode).limit(1);
+    const retry = await supabase.from("projects").select("id").eq("trip_code", cleanCode);
     data = retry.data;
     error = retry.error;
   }
 
   if (error) throw error;
-  return data?.[0]?.id || null;
+
+  const timestampValue = (project) => {
+    const value = project.last_synced_at || project.created_at;
+    const timestamp = value ? new Date(value).getTime() : 0;
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  };
+
+  return [...(data || [])].sort((a, b) => timestampValue(b) - timestampValue(a))[0]?.id || null;
 }
 
 export async function listUserProjects(userId) {
