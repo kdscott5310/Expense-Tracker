@@ -870,6 +870,7 @@ export default function ReceiptSplitApp() {
       setTripAccessStatus("Enter a trip code first.");
       return;
     }
+    setAccessTripCode(cleanCode);
 
     try {
       const projectId = await findProjectIdByTripCode(cleanCode);
@@ -895,10 +896,10 @@ export default function ReceiptSplitApp() {
     }
 
     try {
-      let projectId = isSharedProject ? project.id : "";
       const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
-      if (!projectId && cleanCode) {
-        projectId = await findProjectIdByTripCode(cleanCode);
+      let projectId = cleanCode ? await findProjectIdByTripCode(cleanCode) : "";
+      if (!projectId && isSharedProject) {
+        projectId = project.id;
       }
 
       if (!projectId) {
@@ -946,7 +947,10 @@ export default function ReceiptSplitApp() {
         }
       }
 
-      const cleanCode = normalizeTripCode(project.tripCode || accessTripCode);
+      const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
+      if (cleanCode) {
+        setAccessTripCode(cleanCode);
+      }
       const projectToSave = cleanCode ? { ...project, tripCode: cleanCode } : project;
       const savedProject = await saveProjectToSupabase(projectToSave, { userId: currentUser?.id });
       const normalizedProject = normalizeProject(savedProject);
@@ -958,7 +962,11 @@ export default function ReceiptSplitApp() {
       setProjectIdInUrl(normalizedProject.id);
       setIsSharedProject(true);
       setSharedProjectLoaded(true);
-      setShareStatus(`Synced to server: ${formatServerTime(normalizedProject.serverSyncedAt)}.`);
+      setShareStatus(
+        `Saved to server${normalizedProject.tripCode ? ` as ${normalizedProject.tripCode}` : ""}: ${formatServerTime(
+          normalizedProject.serverSyncedAt,
+        )}.`,
+      );
       setSaveStatus(
         normalizedProject.tripCode
           ? `Trip ${normalizedProject.tripCode} synced to Supabase at ${formatServerTime(normalizedProject.serverSyncedAt)}.`
@@ -1007,9 +1015,12 @@ export default function ReceiptSplitApp() {
   };
 
   const downloadProjectBackup = () => {
-    const safeName = normalizeTripCode(project.tripCode || project.name || "trip-backup").toLowerCase();
+    const safeName = normalizeTripCode(accessTripCode || project.tripCode || project.name || "trip-backup").toLowerCase();
     const backup = {
       exportedAt: new Date().toISOString(),
+      source: "browser-current-project",
+      tripCode: normalizeTripCode(accessTripCode || project.tripCode),
+      projectUrl: window.location.href,
       project,
     };
     const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });

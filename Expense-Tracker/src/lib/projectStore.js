@@ -74,11 +74,20 @@ export async function findProjectIdByTripCode(code) {
   const cleanCode = normalizeTripCode(code);
   if (!cleanCode) return null;
 
-  const { data, error } = await supabase
+  const query = supabase
     .from("projects")
-    .select("id")
+    .select("id, last_synced_at, created_at")
     .eq("trip_code", cleanCode)
+    .order("last_synced_at", { ascending: false, nullsFirst: false })
     .limit(1);
+
+  let { data, error } = await query;
+
+  if (error && isMissingColumnError(error)) {
+    const retry = await supabase.from("projects").select("id").eq("trip_code", cleanCode).limit(1);
+    data = retry.data;
+    error = retry.error;
+  }
 
   if (error) throw error;
   return data?.[0]?.id || null;
