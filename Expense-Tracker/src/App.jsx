@@ -111,6 +111,23 @@ function normalizeProject(project) {
   };
 }
 
+function cloneProjectForTripCode(project, tripCode) {
+  return {
+    ...project,
+    id: crypto.randomUUID(),
+    tripCode,
+    serverSyncedAt: "",
+    receipts: project.receipts.map((receipt) => ({
+      ...receipt,
+      id: crypto.randomUUID(),
+      items: receipt.items.map((item) => ({
+        ...item,
+        id: crypto.randomUUID(),
+      })),
+    })),
+  };
+}
+
 function loadInitialProject() {
   if (typeof window === "undefined") return createInitialProject();
 
@@ -946,7 +963,13 @@ export default function ReceiptSplitApp() {
         return;
       }
 
-      if (!isSharedProject && !currentUser) {
+      const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
+      const currentProjectCode = normalizeTripCode(project.tripCode);
+      if (cleanCode) {
+        setAccessTripCode(cleanCode);
+      }
+
+      if (!isSharedProject && !currentUser && !cleanCode) {
         const existingProjectId = await findProjectIdByName(project.name);
         if (existingProjectId && existingProjectId !== project.id) {
           const loadedProject = await loadProjectFromSupabase(existingProjectId);
@@ -956,11 +979,12 @@ export default function ReceiptSplitApp() {
         }
       }
 
-      const cleanCode = normalizeTripCode(accessTripCode || project.tripCode);
-      if (cleanCode) {
-        setAccessTripCode(cleanCode);
-      }
-      const projectToSave = cleanCode ? { ...project, tripCode: cleanCode } : project;
+      const isSavingAsNewTripCode = isSharedProject && cleanCode && currentProjectCode && cleanCode !== currentProjectCode;
+      const projectToSave = isSavingAsNewTripCode
+        ? cloneProjectForTripCode(project, cleanCode)
+        : cleanCode
+          ? { ...project, tripCode: cleanCode }
+          : project;
       const savedProject = await saveProjectToSupabase(projectToSave, { userId: currentUser?.id });
       const normalizedProject = normalizeProject(savedProject);
       applyingRemoteProjectRef.current = true;
