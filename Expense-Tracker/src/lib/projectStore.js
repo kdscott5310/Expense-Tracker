@@ -255,6 +255,16 @@ export async function saveProjectToSupabase(project, options = {}) {
   const existingReceiptIds = new Set((existingReceipts || []).map((receipt) => receipt.id));
   const receiptsToUpsert = receiptsWithIds.filter((receipt) => existingReceiptIds.has(receipt.id));
   const receiptsToInsert = receiptsWithIds.filter((receipt) => !existingReceiptIds.has(receipt.id));
+  const currentReceiptIds = new Set(receiptsWithIds.map((receipt) => receipt.id));
+  const receiptIdsToDelete = [...existingReceiptIds].filter((receiptIdToDelete) => !currentReceiptIds.has(receiptIdToDelete));
+
+  if (receiptIdsToDelete.length) {
+    const { error: deletedItemsError } = await supabase.from("receipt_items").delete().in("receipt_id", receiptIdsToDelete);
+    if (deletedItemsError) throw deletedItemsError;
+
+    const { error: deletedReceiptsError } = await supabase.from("receipts").delete().in("id", receiptIdsToDelete);
+    if (deletedReceiptsError) throw deletedReceiptsError;
+  }
 
   const receiptRows = (receipts, includeMetadata = true) =>
     receipts.map((receipt) => {
@@ -307,6 +317,21 @@ export async function saveProjectToSupabase(project, options = {}) {
       shared_by: item.sharedBy,
     })),
   );
+
+  const currentItemIds = new Set(receiptItems.map((item) => item.id));
+  const retainedReceiptIds = receiptsWithIds.map((receipt) => receipt.id);
+  const { data: existingItems, error: existingItemsError } = retainedReceiptIds.length
+    ? await supabase.from("receipt_items").select("id").in("receipt_id", retainedReceiptIds)
+    : { data: [], error: null };
+
+  if (existingItemsError) throw existingItemsError;
+
+  const itemIdsToDelete = (existingItems || []).map((item) => item.id).filter((itemIdToDelete) => !currentItemIds.has(itemIdToDelete));
+
+  if (itemIdsToDelete.length) {
+    const { error } = await supabase.from("receipt_items").delete().in("id", itemIdsToDelete);
+    if (error) throw error;
+  }
 
   if (receiptItems.length) {
     const { error } = await supabase.from("receipt_items").upsert(receiptItems);
