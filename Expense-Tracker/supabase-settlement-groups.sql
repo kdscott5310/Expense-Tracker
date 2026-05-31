@@ -1,4 +1,7 @@
 alter table public.projects
+add column if not exists last_synced_at timestamptz;
+
+alter table public.projects
 add column if not exists settlement_groups jsonb not null default '[]'::jsonb;
 
 alter table public.projects

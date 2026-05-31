@@ -308,7 +308,7 @@ export async function saveProjectToSupabase(project, options = {}) {
     ...project,
     id,
     tripCode,
-    serverSyncedAt: projectRow.last_synced_at || project.serverSyncedAt || "",
+    serverSyncedAt: syncTimestamp,
     settlementGroups: project.settlementGroups || [],
     settlementPayments: project.settlementPayments || [],
     discrepancies: project.discrepancies || [],
